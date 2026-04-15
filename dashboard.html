@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Advanced Activity Analytics</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        .chart-container { position: relative; height: 300px; width: 100%; }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-900 font-sans">
+
+    <div class="max-w-7xl mx-auto px-4 py-8">
+        <!-- Header -->
+        <header class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8 bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+            <div class="flex items-center gap-4">
+                <div class="bg-blue-600 p-3 rounded-xl">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H3m5-4h4m-4 4h4m-4 4h4m-4 4h4m-4-12h4m-4 4h4m-4 4h4" />
+                    </svg>
+                </div>
+                <div>
+                    <h1 class="text-2xl font-bold text-slate-800">Activity Analytics Dashboard</h1>
+                    <p class="text-slate-500">Analyzing stateful telemetry and app usage patterns</p>
+                </div>
+            </div>
+            <div class="flex items-center gap-3">
+                <label class="cursor-pointer bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4 4m0 0l-4-4m4 4V4" />
+                    </svg>
+                    Upload logs.txt
+                    <input type="file" id="logInput" class="hidden" accept=".txt">
+                </label>
+            </div>
+        </header>
+
+        <!-- Summary Grid -->
+        <div id="summaryGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8 hidden">
+            <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+                <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Duration</p>
+                <p id="statTotalTime" class="text-2xl font-bold text-slate-800">-</p>
+            </div>
+            <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+                <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Current Focus</p>
+                <p id="statApp" class="text-2xl font-bold text-slate-800 truncate">-</p>
+            </div>
+            <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+                <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Active vs Idle</p>
+                <p id="statActiveRate" class="text-2xl font-bold text-slate-800">-</p>
+            </div>
+            <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+                <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Unique Apps</p>
+                <p id="statUniqueApps" class="text-2xl font-bold text-slate-800">-</p>
+            </div>
+        </div>
+
+        <!-- Main Charts Area -->
+        <div id="chartsGrid" class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8 hidden">
+            <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 col-span-1 lg:col-span-1">
+                <h3 class="text-lg font-semibold mb-4 text-slate-700 flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 3.055A9.001 9.001 0 1020.945 13H11V3.055z" />
+                    </svg>
+                    Total Time per App (Seconds)
+                </h3>
+                <div class="chart-container">
+                    <canvas id="appDistributionChart"></canvas>
+                </div>
+            </div>
+            <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 col-span-1 lg:col-span-1">
+                <h3 class="text-lg font-semibold mb-4 text-slate-700 flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                    </svg>
+                    Idle Time Trend
+                </h3>
+                <div class="chart-container">
+                    <canvas id="idleTimelineChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Domain/Activity Breakdown -->
+        <div id="domainSection" class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 mb-8 hidden">
+            <h3 class="text-lg font-semibold mb-4 text-slate-700">Web Domain/Title Activity</h3>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4" id="domainPills">
+            </div>
+        </div>
+
+        <!-- Log Table -->
+        <div id="tableContainer" class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden hidden">
+            <div class="p-6 border-b border-slate-200 flex justify-between items-center">
+                <h3 class="text-lg font-semibold text-slate-700">Stateful Log Feed</h3>
+                <span class="text-xs text-slate-400 italic">Most recent entries first</span>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full text-left text-sm">
+                    <thead class="bg-slate-50 text-slate-500 uppercase text-xs font-semibold">
+                        <tr class="border-b border-slate-100">
+                            <th class="px-6 py-3">Timestamp</th>
+                            <th class="px-6 py-3">App</th>
+                            <th class="px-6 py-3">Domain/Title</th>
+                            <th class="px-6 py-3">Session</th>
+                            <th class="px-6 py-3">Idle</th>
+                            <th class="px-6 py-3">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="logTableBody" class="divide-y divide-slate-100">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Empty State -->
+        <div id="emptyState" class="flex flex-col items-center justify-center py-20 text-center">
+            <div class="bg-slate-200 p-4 rounded-full mb-4">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-12 w-12 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m6 10H3a2 2 0 01-2-2V5a2 2 0 012-2h18a2 2 0 012 2v14a2 2 0 01-2 2z" />
+                </svg>
+            </div>
+            <h2 class="text-xl font-medium text-slate-600">No telemetry data loaded</h2>
+            <p class="text-slate-400 mt-2">Upload your stateful logs.txt to see detailed activity analytics</p>
+        </div>
+    </div>
+
+    <script>
+        let appChart = null;
+        let idleChart = null;
+
+        document.getElementById('logInput').addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const text = await file.text();
+            const lines = text.split('\n').filter(line => line.trim());
+            const data = [];
+
+            lines.forEach(line => {
+                try {
+                    data.push(JSON.parse(line));
+                } catch (err) {
+                    console.error("Parsing error:", err);
+                }
+            });
+
+            if (data.length === 0) {
+                alert("No valid telemetry data found.");
+                return;
+            }
+
+            data.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+            renderDashboard(data);
+        });
+
+        function renderDashboard(data) {
+            document.getElementById('emptyState').classList.add('hidden');
+            document.getElementById('summaryGrid').classList.remove('hidden');
+            document.getElementById('chartsGrid').classList.remove('hidden');
+            document.getElementById('domainSection').classList.remove('hidden');
+            document.getElementById('tableContainer').classList.remove('hidden');
+
+            const lastEntry = data[data.length - 1];
+
+            const totalDurationSeconds = Object.values(lastEntry.app_usage_total || {}).reduce((a, b) => a + b, 0);
+            const activeCount = data.filter(e => e.active).length;
+            const activityRate = ((activeCount / data.length) * 100).toFixed(1);
+            const uniqueApps = Object.keys(lastEntry.app_usage_total || {}).length;
+
+            document.getElementById('statTotalTime').textContent = formatDuration(totalDurationSeconds);
+            document.getElementById('statApp').textContent = lastEntry.current_app || "Unknown";
+            document.getElementById('statActiveRate').textContent = `${activityRate}% Active`;
+            document.getElementById('statUniqueApps').textContent = uniqueApps;
+
+            const usageData = lastEntry.app_usage_total || {};
+            const sortedApps = Object.entries(usageData)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 10);
+
+            const ctxApp = document.getElementById('appDistributionChart').getContext('2d');
+            if (appChart) appChart.destroy();
+            appChart = new Chart(ctxApp, {
+                type: 'bar',
+                data: {
+                    labels: sortedApps.map(a => a[0]),
+                    datasets: [{
+                        label: 'Total Seconds',
+                        data: sortedApps.map(a => a[1]),
+                        backgroundColor: '#3b82f6',
+                        borderRadius: 6
+                    }]
+                },
+                options: {
+                    indexAxis: 'y',
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } }
+                }
+            });
+
+            const ctxIdle = document.getElementById('idleTimelineChart').getContext('2d');
+            if (idleChart) idleChart.destroy();
+            idleChart = new Chart(ctxIdle, {
+                type: 'line',
+                data: {
+                    labels: data.map(e => new Date(e.timestamp).toLocaleTimeString()),
+                    datasets: [{
+                        label: 'Idle Seconds',
+                        data: data.map(e => e.idle_seconds),
+                        borderColor: '#ef4444',
+                        backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                        fill: true,
+                        tension: 0.3,
+                        pointRadius: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: { y: { beginAtZero: true } },
+                    plugins: { legend: { display: false } }
+                }
+            });
+
+            const domainCounts = {};
+            data.forEach(e => {
+                if (e.domain && e.domain !== "N/A") {
+                    domainCounts[e.domain] = (domainCounts[e.domain] || 0) + 1;
+                }
+            });
+            const sortedDomains = Object.entries(domainCounts).sort((a, b) => b[1] - a[1]).slice(0, 9);
+
+            const pillsContainer = document.getElementById('domainPills');
+            pillsContainer.innerHTML = '';
+            sortedDomains.forEach(([domain, count]) => {
+                const pill = document.createElement('div');
+                pill.className = "bg-slate-100 p-3 rounded-xl border border-slate-200 flex justify-between items-center";
+                pill.innerHTML = `<span class="font-medium text-slate-700 truncate">${domain}</span> <span class="text-xs text-slate-400">${count} hits</span>`;
+                pillsContainer.appendChild(pill);
+            });
+
+            const tbody = document.getElementById('logTableBody');
+            tbody.innerHTML = '';
+            [...data].reverse().slice(0, 50).forEach(entry => {
+                const row = document.createElement('tr');
+                row.className = "hover:bg-slate-50 transition-colors";
+                row.innerHTML = `
+                    <td class="px-6 py-4 text-slate-500 text-xs">${new Date(entry.timestamp).toLocaleString()}</td>
+                    <td class="px-6 py-4 font-medium text-slate-800">${entry.current_app}</td>
+                    <td class="px-6 py-4 text-slate-600 truncate max-w-xs">${entry.domain}</td>
+                    <td class="px-6 py-4 text-slate-600">${entry.session_duration}s</td>
+                    <td class="px-6 py-4 text-slate-600">${entry.idle_seconds}s</td>
+                    <td class="px-6 py-4">
+                        <span class="px-2 py-1 rounded-full text-xs font-semibold ${entry.active ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}">
+                            ${entry.active ? 'Active' : 'Idle'}
+                        </span>
+                    </td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+
+        function formatDuration(seconds) {
+            const h = Math.floor(seconds / 3600);
+            const m = Math.floor((seconds % 3600) / 60);
+            const s = Math.floor(seconds % 60);
+            return `${h}h ${m}m ${s}s`;
+        }
+    </script>
+</body>
+</html>

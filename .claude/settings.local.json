@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(C:/Users/MohamedAshmar/playground/user-tracking-tool/user-track/Scripts/python.exe -m pip install fastapi uvicorn)",
+      "Bash(C:/Users/MohamedAshmar/playground/user-tracking-tool/user-track/Scripts/python.exe server.py)"
+    ]
+  }
+}
