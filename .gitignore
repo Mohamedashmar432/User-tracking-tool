@@ -20,4 +20,3 @@ func-venv/
 
 # PyInstaller build artifacts
 build/
-dist/
