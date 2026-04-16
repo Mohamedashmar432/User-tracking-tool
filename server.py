@@ -1,13 +1,17 @@
 import os
 import json
+import platform
+import getpass
+import re
 from datetime import datetime
 from typing import List, Dict, Any
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
+from azure.data.tables import TableClient, TableServiceClient
 
-app = FastAPI(title="Employee Telemetry API")
+app = FastAPI(title="Employee Telemetry Analytics Server")
 
 # Enable CORS for the frontend
 app.add_middleware(
@@ -17,124 +21,145 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-LOG_FILE = "logs.txt"
-LOG_FILE_OLD = "logs.txt.old"
+# Configuration
+CONNECTION_STRING = os.getenv("AzureWebJobsStorage", "UseDevelopmentStorageAccount")
+APP_USAGE_TABLE = "UserAppUsage"
+DAILY_SUMMARY_TABLE = "UserDailySummary"
+ACTIVITY_LOGS_TABLE = "UserActivityLogs"
 
-# App Categorization Maps
-PRODUCTIVE_APPS = {
-    "code.exe", "codinsiders.exe", "windowsterminal.exe", "powershell.exe", "cmd.exe",
-    "excel.exe", "winword.exe", "powerpnt.exe", "slack.exe", "teams.exe", "zoom.exe"
-}
-PRODUCTIVE_DOMAINS = {
-    "github.com", "stackoverflow.com", "docs.microsoft.com", "docs.python.org",
-    "linkedin.com", "medium.com", "jira.atlassian.com", "confluence.atlassian.com"
-}
-DISTRACTION_DOMAINS = {
-    "youtube.com", "facebook.com", "twitter.com", "x.com", "instagram.com",
-    "reddit.com", "netflix.com", "twitch.tv", "tiktok.com"
-}
+# Categorization Rules
+PRODUCTIVE_KEYWORDS = {"code.exe", "codinsiders.exe", "windowsterminal.exe", "powershell.exe", "cmd.exe", "excel", "word", "powerpnt", "github.com", "stackoverflow.com"}
+UNPRODUCTIVE_KEYWORDS = {"youtube.com", "netflix.com", "instagram.com", "facebook.com", "twitter.com", "x.com"}
 
-def categorize_activity(app_name: str, domain: str) -> str:
-    app_lower = app_name.lower()
-    domain_lower = domain.lower()
-
-    # Check if it's a browser with a distraction domain
-    if any(browser in app_lower for browser in ["chrome", "edge", "firefox", "brave"]):
-        if any(d in domain_lower for d in DISTRACTION_DOMAINS):
-            return "Distraction"
-        if any(d in domain_lower for d in PRODUCTIVE_DOMAINS):
-            return "Productive"
-        return "Neutral"
-
-    # Check if the process itself is productive
-    if any(p in app_lower for p in PRODUCTIVE_APPS):
+def categorize_app(app_name, domain="N/A"):
+    text = (app_name + " " + domain).lower()
+    if any(k in text for k in UNPRODUCTIVE_KEYWORDS):
+        return "Unproductive"
+    if any(k in text for k in PRODUCTIVE_KEYWORDS):
         return "Productive"
-
-    # Fallback based on process name for common distractions (games etc)
-    if any(word in app_lower for word in ["steam", "epicgames", "origin", "battle.net"]):
-        return "Distraction"
-
     return "Neutral"
 
-def read_logs() -> List[Dict]:
-    data = []
-    # Read rotated log first, then current log
-    for path in [LOG_FILE_OLD, LOG_FILE]:
-        if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
-                for line in f:
-                    if line.strip():
-                        try:
-                            data.append(json.loads(line))
-                        except json.JSONDecodeError:
-                            continue
-    return data
+class TableService:
+    def __init__(self):
+        # Attempt to resolve the connection string for local development
+        conn_str = CONNECTION_STRING
+
+        # 1. If it's the placeholder, try to load from local.settings.json
+        if conn_str == "UseDevelopmentStorageAccount":
+            try:
+                settings_path = "telemetry-func/local.settings.json"
+                if os.path.exists(settings_path):
+                    with open(settings_path, "r") as f:
+                        settings = json.load(f)
+                        conn_str = settings.get("Values", {}).get("AzureWebJobsStorage", conn_str)
+            except Exception as e:
+                print(f"Warning: Could not load local.settings.json: {e}")
+
+        # 2. Final Fallback: Azurite shorthand
+        if conn_str == "UseDevelopmentStorageAccount":
+            conn_str = "UseDevelopmentStorage=true"
+
+        self.service_client = TableServiceClient.from_connection_string(conn_str)
+
+    def get_table_client(self, table_name):
+        return self.service_client.get_table_client(table_name)
+
+storage = TableService()
 
 @app.get("/")
 async def read_index():
     return FileResponse("index.html")
 
-@app.get("/api/stats")
-async def get_stats():
-    logs = read_logs()
-    if not logs:
-        return {"error": "No logs found"}
+@app.get("/api/users")
+async def get_users():
+    """Get list of all unique users from the Daily Summary table."""
+    try:
+        table_client = storage.get_table_client(DAILY_SUMMARY_TABLE)
+        entities = table_client.list_entities()
+        users = list(set([e['RowKey'] for e in entities]))
+        return [{"user": u} for u in sorted(users)]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-    last_entry = logs[-1]
+@app.get("/api/user-summary")
+async def get_user_summary(user: str, date: str):
+    """Retrieve aggregated stats for a specific user and date."""
+    try:
+        table_client = storage.get_table_client(DAILY_SUMMARY_TABLE)
+        entity = table_client.get_entity(partition_key=date, row_key=user)
 
-    # 1. Calculate Total Times
-    usage_total = last_entry.get("app_usage_total", {})
-    total_active_seconds = sum(usage_total.values())
+        active_time = entity.get("total_active_time", 0)
+        idle_time = entity.get("total_idle_time", 0)
 
-    # 2. Categorize Usage
-    category_totals = {"Productive": 0, "Distraction": 0, "Neutral": 0}
-    for app, seconds in usage_total.items():
-        # We don't have the domain for total aggregated time (only for the current snapshot)
-        # So we categorize the process name
-        cat = categorize_activity(app, "N/A")
-        category_totals[cat] += seconds
+        # Calculate Productivity Score (requires querying UserAppUsage)
+        app_table = storage.get_table_client(APP_USAGE_TABLE)
+        prod_time = 0
+        # Convert to list so we can iterate twice without exhausting the iterator
+        entities = list(app_table.query_entities(f"PartitionKey eq '{user}_{date}'"))
+        for e in entities:
+            if categorize_app(e['RowKey']) == "Productive":
+                prod_time += e.get("total_active_seconds", 0)
 
-    # 3. Productivity Score
-    productivity_score = 0
-    if total_active_seconds > 0:
-        productivity_score = (category_totals["Productive"] / total_active_seconds) * 100
+        score = (prod_time / active_time * 100) if active_time > 0 else 0
 
-    # 4. Timeline Data (Last 100 entries)
-    timeline = []
-    for entry in logs[-100:]:
-        timeline.append({
-            "t": entry.get("timestamp"),
-            "idle": entry.get("idle_seconds", 0),
-            "active": entry.get("active", False),
-            "app": entry.get("current_app", "Unknown")
-        })
+        # Find top app
+        top_app = "None"
+        max_time = -1
+        for e in entities:
+            if e.get("total_active_seconds", 0) > max_time:
+                max_time = e.get("total_active_seconds", 0)
+                top_app = e['RowKey']
 
-    # 5. Recent Activity Feed
-    feed = []
-    for entry in reversed(logs[-20:]):
-        cat = categorize_activity(entry.get("current_app", ""), entry.get("domain", ""))
-        feed.append({
-            "timestamp": entry.get("timestamp"),
-            "app": entry.get("current_app"),
-            "domain": entry.get("domain"),
-            "category": cat,
-            "duration": entry.get("session_duration", 0)
-        })
+        return {
+            "user": user,
+            "date": date,
+            "total_active_time": active_time,
+            "total_idle_time": idle_time,
+            "productivity_score": round(score, 1),
+            "top_app": top_app
+        }
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"User/Date not found: {str(e)}")
 
-    return {
-        "summary": {
-            "total_active_time": total_active_seconds,
-            "productivity_score": round(productivity_score, 1),
-            "current_app": last_entry.get("current_app"),
-            "current_domain": last_entry.get("domain"),
-            "active_status": last_entry.get("active"),
-            "idle_seconds": last_entry.get("idle_seconds")
-        },
-        "categories": category_totals,
-        "timeline": timeline,
-        "feed": feed,
-        "app_totals": usage_total
-    }
+@app.get("/api/user-apps")
+async def get_user_apps(user: str, date: str):
+    """List all apps used by a user on a date with categories."""
+    try:
+        table_client = storage.get_table_client(APP_USAGE_TABLE)
+        pk = f"{user}_{date}"
+        entities = table_client.query_entities(f"PartitionKey eq '{pk}'")
+
+        apps = []
+        for e in entities:
+            app_name = e['RowKey']
+            apps.append({
+                "app": app_name,
+                "time": e.get("total_active_seconds", 0),
+                "category": categorize_app(app_name)
+            })
+        return sorted(apps, key=lambda x: x['time'], reverse=True)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/user-timeline")
+async def get_user_timeline(user: str, date: str):
+    """Fetch chronological activity events from UserActivityLogs."""
+    try:
+        table_client = storage.get_table_client(ACTIVITY_LOGS_TABLE)
+        pk = f"{user}_{date}"
+        entities = table_client.query_entities(f"PartitionKey eq '{pk}'")
+
+        timeline = []
+        for e in entities:
+            timeline.append({
+                "timestamp": e.get("timestamp", ""),
+                "active": e.get("active", False),
+                "app": e.get("app", "Unknown")
+            })
+        timeline.sort(key=lambda x: x['timestamp'])
+        return timeline
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

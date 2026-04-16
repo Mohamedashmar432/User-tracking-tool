@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Enterprise Activity Analytics</title>
+    <title>Enterprise Productivity Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -11,287 +11,426 @@
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
         body { font-family: 'Inter', sans-serif; }
         .chart-container { position: relative; height: 280px; width: 100%; }
-        .glass { background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(12px); }
-        .metric-card { transition: all 0.3s ease; }
-        .metric-card:hover { transform: translateY(-2px); box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); }
+        .sidebar-item.active { background-color: #eef2ff; color: #4f46e5; border-right: 4px solid #4f46e5; }
     </style>
 </head>
 <body class="bg-slate-100 text-slate-900">
 
-    <div class="min-h-screen flex flex-col">
-        <!-- Navigation -->
-        <nav class="glass sticky top-0 z-50 border-b border-slate-200 px-6 py-4 flex justify-between items-center">
-            <div class="flex items-center gap-3">
-                <div class="bg-indigo-600 p-2 rounded-lg shadow-indigo-200 shadow-lg">
-                    <i data-lucide="activity" class="text-white w-6 h-6"></i>
-                </div>
-                <div>
-                    <h1 class="text-xl font-bold tracking-tight text-slate-800">Telemetry Insight <span class="text-indigo-600">Pro</span></h1>
-                    <p class="text-xs text-slate-500 font-medium">Real-time Employee Productivity Monitor</p>
-                </div>
-            </div>
-            <div id="liveIndicator" class="flex items-center gap-2 px-3 py-1 rounded-full bg-slate-200 text-slate-600 text-xs font-bold uppercase tracking-wider transition-all">
-                <span class="relative flex h-2 w-2">
-                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
-                    <span class="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
-                </span>
-                Live Feed
-            </div>
-        </nav>
-
-        <main class="flex-1 p-6 space-y-6">
-            <!-- Top KPI Row -->
-            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                <div class="metric-card bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                    <div class="flex justify-between items-start mb-4">
-                        <div class="p-2 bg-indigo-50 rounded-lg text-indigo-600">
-                            <i data-lucide="zap" class="w-5 h-5"></i>
-                        </div>
-                        <span class="text-xs font-bold text-indigo-500 bg-indigo-50 px-2 py-1 rounded">CORE KPI</span>
+    <div class="flex h-screen overflow-hidden">
+        <!-- Sidebar -->
+        <aside class="w-72 bg-white border-r border-slate-200 flex flex-col">
+            <div class="p-6 border-b border-slate-100">
+                <div class="flex items-center gap-2 mb-6">
+                    <div class="bg-indigo-600 p-2 rounded-lg text-white">
+                        <i data-lucide="layout-dashboard" class="w-5 h-5"></i>
                     </div>
-                    <p class="text-sm font-medium text-slate-500">Productivity Score</p>
-                    <h2 id="scoreValue" class="text-4xl font-extrabold text-slate-800 mt-1">0%</h2>
-                    <div class="mt-4 w-full bg-slate-100 h-2 rounded-full overflow-hidden">
-                        <div id="scoreBar" class="bg-indigo-600 h-full transition-all duration-1000" style="width: 0%"></div>
-                    </div>
+                    <h1 class="font-bold text-lg text-slate-800">ProdAnalytics</h1>
                 </div>
-
-                <div class="metric-card bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                    <div class="flex justify-between items-start mb-4">
-                        <div class="p-2 bg-emerald-50 rounded-lg text-emerald-600">
-                            <i data-lucide="clock" class="w-5 h-5"></i>
-                        </div>
-                    </div>
-                    <p class="text-sm font-medium text-slate-500">Total Active Time</p>
-                    <h2 id="totalTimeValue" class="text-4xl font-extrabold text-slate-800 mt-1">0s</h2>
-                    <p id="totalTimeDetail" class="text-xs text-slate-400 mt-2">Across all applications</p>
-                </div>
-
-                <div class="metric-card bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                    <div class="flex justify-between items-start mb-4">
-                        <div class="p-2 bg-amber-50 rounded-lg text-amber-600">
-                            <i data-lucide="eye" class="w-5 h-5"></i>
-                        </div>
-                    </div>
-                    <p class="text-sm font-medium text-slate-500">Current Focus</p>
-                    <h2 id="focusAppValue" class="text-xl font-bold text-slate-800 mt-2 truncate">-</h2>
-                    <p id="focusDomainValue" class="text-xs text-slate-400 truncate mt-1">-</p>
-                </div>
-
-                <div class="metric-card bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                    <div class="flex justify-between items-start mb-4">
-                        <div class="p-2 bg-slate-50 rounded-lg text-slate-600">
-                            <i data-lucide="layers" class="w-5 h-5"></i>
-                        </div>
-                    </div>
-                    <p class="text-sm font-medium text-slate-500">App Diversity</p>
-                    <h2 id="uniqueAppsValue" class="text-4xl font-extrabold text-slate-800 mt-1">0</h2>
-                    <p class="text-xs text-slate-400 mt-2">Unique processes tracked</p>
+                <div class="relative">
+                    <i data-lucide="search" class="absolute left-3 top-3 w-4 h-4 text-slate-400"></i>
+                    <input type="text" id="userSearch" placeholder="Search employee..."
+                           class="w-full pl-9 pr-4 py-2 text-sm border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500">
                 </div>
             </div>
+            <div id="userList" class="flex-1 overflow-y-auto py-2">
+                <div class="p-4 text-center text-slate-400 text-sm">Loading users...</div>
+            </div>
+            <!-- Agent installer — pinned to sidebar bottom -->
+            <div class="p-4 border-t border-slate-100 space-y-2">
+                <a id="downloadAgentBtn" href="#"
+                   class="flex items-center justify-center gap-2 w-full px-4 py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700 active:scale-95 transition-all">
+                    <i data-lucide="download" class="w-4 h-4"></i>
+                    Download Agent (.exe)
+                </a>
+                <a id="downloadScriptBtnSidebar" href="#"
+                   class="flex items-center justify-center gap-2 w-full px-4 py-2 border border-slate-200 text-slate-600 text-sm font-medium rounded-xl hover:bg-slate-50 active:scale-95 transition-all">
+                    <i data-lucide="file-code" class="w-4 h-4"></i>
+                    Download Installer (.ps1)
+                </a>
+                <p class="text-xs text-slate-400 text-center">Run the .ps1 as Administrator to auto-configure</p>
+                <!-- Version badge — fetched from /api/health on load -->
+                <div class="flex items-center justify-center gap-1.5 pt-1">
+                    <span id="serverDot" class="w-2 h-2 rounded-full bg-slate-300"></span>
+                    <span id="serverVersion" class="text-xs text-slate-400">checking...</span>
+                </div>
+            </div>
+        </aside>
 
-            <!-- Analytics Grid -->
-            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                <!-- Distribution Donut -->
-                <div class="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm col-span-1">
-                    <div class="flex items-center gap-2 mb-6">
-                        <i data-lucide="pie-chart" class="w-5 h-5 text-indigo-500"></i>
-                        <h3 class="font-bold text-slate-700">Time Distribution</h3>
+        <!-- Main -->
+        <main class="flex-1 overflow-y-auto bg-slate-50">
+            <div id="welcomeState" class="h-full flex flex-col items-center justify-center p-8 text-center gap-6">
+                <div class="bg-white p-8 rounded-3xl shadow-sm border border-slate-200 max-w-lg w-full">
+                    <div class="bg-indigo-50 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 text-indigo-600">
+                        <i data-lucide="users" class="w-8 h-8"></i>
                     </div>
-                    <div class="chart-container">
-                        <canvas id="distChart"></canvas>
-                    </div>
+                    <h2 class="text-2xl font-bold text-slate-800 mb-2">Employee Analytics</h2>
+                    <p class="text-slate-500">Select an employee from the list to analyze their productivity trends.</p>
                 </div>
 
-                <!-- Activity Timeline -->
-                <div class="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm col-span-1 lg:col-span-2">
-                    <div class="flex items-center gap-2 mb-6">
-                        <i data-lucide="trending-up" class="w-5 h-5 text-indigo-500"></i>
-                        <h3 class="font-bold text-slate-700">Activity Flow (Idle vs Active)</h3>
+                <!-- Agent installer card -->
+                <div class="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 max-w-lg w-full text-left">
+                    <div class="flex items-center gap-3 mb-4">
+                        <div class="bg-emerald-50 p-2.5 rounded-xl text-emerald-600 shrink-0">
+                            <i data-lucide="terminal" class="w-5 h-5"></i>
+                        </div>
+                        <div>
+                            <h3 class="font-semibold text-slate-800 leading-tight">Install Tracking Agent</h3>
+                            <p class="text-xs text-slate-400 mt-0.5">On each employee's Windows machine — run once as Administrator</p>
+                        </div>
                     </div>
-                    <div class="chart-container">
-                        <canvas id="timelineChart"></canvas>
+
+                    <!-- Step list -->
+                    <ol class="space-y-3 mb-4">
+                        <li class="flex gap-3 text-sm">
+                            <span class="shrink-0 w-5 h-5 rounded-full bg-indigo-100 text-indigo-600 text-xs font-bold flex items-center justify-center">1</span>
+                            <span class="text-slate-600">Open <strong>PowerShell</strong> as <strong>Administrator</strong> on the employee machine</span>
+                        </li>
+                        <li class="flex gap-3 text-sm">
+                            <span class="shrink-0 w-5 h-5 rounded-full bg-indigo-100 text-indigo-600 text-xs font-bold flex items-center justify-center">2</span>
+                            <span class="text-slate-600">Paste and run this command:</span>
+                        </li>
+                    </ol>
+
+                    <!-- One-liner command box -->
+                    <div class="flex items-center gap-2 bg-slate-900 rounded-xl px-4 py-3 mb-4">
+                        <i data-lucide="terminal" class="w-3.5 h-3.5 text-slate-500 shrink-0"></i>
+                        <code id="installCmd" class="flex-1 text-xs text-emerald-400 font-mono break-all">Loading…</code>
+                        <button id="copyBtn" onclick="copyInstallCmd()"
+                                class="shrink-0 p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700 transition-all"
+                                title="Copy to clipboard">
+                            <i data-lucide="copy" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+
+                    <ol class="space-y-3 mb-5" start="3">
+                        <li class="flex gap-3 text-sm">
+                            <span class="shrink-0 w-5 h-5 rounded-full bg-indigo-100 text-indigo-600 text-xs font-bold flex items-center justify-center">3</span>
+                            <span class="text-slate-600">Accept the UAC prompt — the script downloads the agent, configures the server URL, and registers a scheduled task to start automatically at login</span>
+                        </li>
+                    </ol>
+
+                    <!-- Divider + fallback download -->
+                    <div class="flex items-center gap-3 pt-4 border-t border-slate-100">
+                        <span class="text-xs text-slate-400">Prefer manual setup?</span>
+                        <a id="downloadAgentBtnWelcome" href="#"
+                           class="inline-flex items-center gap-1.5 text-xs text-indigo-600 hover:text-indigo-800 font-medium transition-colors">
+                            <i data-lucide="download" class="w-3.5 h-3.5"></i>
+                            Download telemetry_agent.exe
+                        </a>
+                        <span class="text-slate-200">|</span>
+                        <a id="downloadScriptBtn" href="#"
+                           class="inline-flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-700 font-medium transition-colors">
+                            <i data-lucide="file-code" class="w-3.5 h-3.5"></i>
+                            Download install_agent.ps1
+                        </a>
                     </div>
                 </div>
             </div>
 
-            <!-- Bottom Section: Feed & Top Apps -->
-            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                <!-- Activity Feed -->
-                <div class="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm col-span-1 lg:col-span-2">
-                    <div class="flex items-center justify-between mb-6">
-                        <div class="flex items-center gap-2">
-                            <i data-lucide="list" class="w-5 h-5 text-indigo-500"></i>
-                            <h3 class="font-bold text-slate-700">Real-time Event Stream</h3>
-                        </div>
-                        <span class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Live Updates</span>
+            <div id="dashboardState" class="hidden p-8 space-y-8">
+                <header class="flex justify-between items-end">
+                    <div>
+                        <p class="text-sm font-medium text-slate-500 uppercase tracking-wider">User Profile</p>
+                        <h2 id="userName" class="text-3xl font-extrabold text-slate-900">User Name</h2>
                     </div>
-                    <div class="space-y-3 max-h-[400px] overflow-y-auto pr-2" id="activityFeed">
-                        <!-- Feed items added by JS -->
+                    <div class="flex items-center gap-3">
+                        <input type="date" id="datePicker" class="px-3 py-2 border border-slate-200 rounded-lg text-sm outline-none">
+                        <div id="refreshIndicator" class="flex items-center gap-2 px-3 py-2 rounded-full bg-indigo-50 text-indigo-600 text-xs font-bold uppercase tracking-wider">
+                            <i data-lucide="refresh-cw" class="w-3 h-3 animate-spin"></i>
+                            Live
+                        </div>
+                    </div>
+                </header>
+
+                <div class="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-5 gap-6">
+                    <div class="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+                        <span class="text-xs font-bold text-slate-400 uppercase">Productivity Score</span>
+                        <div class="flex items-baseline gap-2 mt-2">
+                            <span id="kpiScore" class="text-4xl font-black text-slate-800">0%</span>
+                        </div>
+                        <div class="mt-4 w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                            <div id="scoreBar" class="bg-indigo-600 h-full transition-all" style="width: 0%"></div>
+                        </div>
+                    </div>
+                    <div class="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+                        <span class="text-xs font-bold text-slate-400 uppercase">Active Time</span>
+                        <h3 id="kpiActive" class="text-4xl font-black text-slate-800 mt-2">0h 0m</h3>
+                    </div>
+                    <div class="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+                        <span class="text-xs font-bold text-slate-400 uppercase">Idle Time</span>
+                        <p class="text-xs text-slate-400 mt-0.5">Screen on, no input</p>
+                        <h3 id="kpiIdle" class="text-4xl font-black text-slate-800 mt-2">0h 0m</h3>
+                    </div>
+                    <div class="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+                        <span class="text-xs font-bold text-slate-400 uppercase">Screen Off / Locked</span>
+                        <p class="text-xs text-slate-400 mt-0.5">Away from desk</p>
+                        <h3 id="kpiLocked" class="text-4xl font-black text-slate-800 mt-2">0h 0m</h3>
+                    </div>
+                    <div class="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+                        <span class="text-xs font-bold text-slate-400 uppercase">Top App</span>
+                        <h3 id="kpiTopApp" class="text-2xl font-bold text-slate-800 mt-2 truncate">-</h3>
                     </div>
                 </div>
 
-                <!-- App Ranking -->
-                <div class="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm col-span-1">
-                    <div class="flex items-center gap-2 mb-6">
-                        <i data-lucide="award" class="w-5 h-5 text-indigo-500"></i>
-                        <h3 class="font-bold text-slate-700">Top Applications</h3>
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                    <div class="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
+                        <h3 class="font-bold text-slate-800 mb-6">Time Distribution</h3>
+                        <div class="chart-container">
+                            <canvas id="categoryChart"></canvas>
+                        </div>
                     </div>
-                    <div id="appRanking" class="space-y-4">
-                        <!-- Ranking items added by JS -->
+                    <div class="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
+                        <h3 class="font-bold text-slate-800 mb-6">Top Applications</h3>
+                        <div class="chart-container">
+                            <canvas id="appChart"></canvas>
+                        </div>
                     </div>
+                </div>
+
+                <div class="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+                    <div class="p-6 border-b border-slate-100 font-bold text-slate-800">Application Details</div>
+                    <table class="w-full text-left text-sm table-fixed">
+                        <colgroup>
+                            <col>                    <!-- App / Tab — takes remaining space -->
+                            <col class="w-36">       <!-- Category — fixed -->
+                            <col class="w-36">       <!-- Duration — fixed -->
+                        </colgroup>
+                        <thead class="bg-slate-50 text-slate-500 uppercase text-xs font-semibold">
+                            <tr>
+                                <th class="px-6 py-4">App / Tab</th>
+                                <th class="px-6 py-4 text-center">Category</th>
+                                <th class="px-6 py-4 text-right">Duration</th>
+                            </tr>
+                        </thead>
+                        <tbody id="appTableBody" class="divide-y divide-slate-100"></tbody>
+                    </table>
                 </div>
             </div>
         </main>
     </div>
 
     <script>
-        let distChart = null;
-        let timeChart = null;
-
-        async function fetchStats() {
-            try {
-                const response = await fetch('/api/stats');
-                const data = await response.json();
-                if (data.error) throw new Error(data.error);
-                updateUI(data);
-            } catch (err) {
-                console.error("Fetch error:", err);
-                document.getElementById('liveIndicator').classList.add('bg-red-100', 'text-red-600');
-                document.getElementById('liveIndicator').textContent = "Disconnected";
-            }
-        }
-
-        function updateUI(data) {
-            const { summary, categories, timeline, feed, app_totals } = data;
-
-            // 1. Top KPIs
-            document.getElementById('scoreValue').textContent = `${summary.productivity_score}%`;
-            document.getElementById('scoreBar').style.width = `${summary.productivity_score}%`;
-            document.getElementById('totalTimeValue').textContent = formatDuration(summary.total_active_time);
-            document.getElementById('focusAppValue').textContent = summary.current_app || "Idle";
-            document.getElementById('focusDomainValue').textContent = summary.current_domain || "No active domain";
-            document.getElementById('uniqueAppsValue').textContent = Object.keys(app_totals).length;
-
-            // 2. Distribution Chart
-            const ctxDist = document.getElementById('distChart').getContext('2d');
-            if (distChart) distChart.destroy();
-            distChart = new Chart(ctxDist, {
-                type: 'doughnut',
-                data: {
-                    labels: ['Productive', 'Distraction', 'Neutral'],
-                    datasets: [{
-                        data: [categories.Productive, categories.Distraction, categories.Neutral],
-                        backgroundColor: ['#4f46e5', '#f43f5e', '#94a3b8'],
-                        borderWidth: 0,
-                        hoverOffset: 10
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: { position: 'bottom', labels: { usePointStyle: true, padding: 20 } }
-                    },
-                    cutout: '70%'
-                }
-            });
-
-            // 3. Timeline Chart
-            const ctxTime = document.getElementById('timelineChart').getContext('2d');
-            if (timeChart) timeChart.destroy();
-            timeChart = new Chart(ctxTime, {
-                type: 'line',
-                data: {
-                    labels: timeline.map(e => new Date(e.t).toLocaleTimeString()),
-                    datasets: [{
-                        label: 'Idle Seconds',
-                        data: timeline.map(e => e.idle),
-                        borderColor: '#6366f1',
-                        backgroundColor: 'rgba(99, 102, 241, 0.1)',
-                        fill: true,
-                        tension: 0.4,
-                        pointRadius: 0
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    scales: {
-                        y: { beginAtZero: true, grid: { display: false } },
-                        x: { grid: { display: false } }
-                    },
-                    plugins: { legend: { display: false } }
-                }
-            });
-
-            // 4. Activity Feed
-            const feedEl = document.getElementById('activityFeed');
-            feedEl.innerHTML = '';
-            feed.forEach(item => {
-                const catColor = item.category === 'Productive' ? 'text-emerald-600 bg-emerald-50' :
-                                 item.category === 'Distraction' ? 'text-rose-600 bg-rose-50' : 'text-slate-500 bg-slate-100';
-                const row = document.createElement('div');
-                row.className = "flex items-center justify-between p-3 rounded-2xl border border-slate-100 bg-slate-50/50 hover:bg-white transition-all";
-                row.innerHTML = `
-                    <div class="flex items-center gap-3">
-                        <span class="text-[10px] font-bold ${catColor} px-2 py-0.5 rounded-full uppercase">${item.category}</span>
-                        <span class="font-semibold text-slate-700 text-sm">${item.app}</span>
-                        <span class="text-xs text-slate-400 truncate max-w-[150px]">${item.domain}</span>
-                    </div>
-                    <div class="text-right">
-                        <span class="text-xs font-medium text-slate-500">${item.duration}s</span>
-                        <div class="text-[10px] text-slate-300">${new Date(item.timestamp).toLocaleTimeString()}</div>
-                    </div>
-                `;
-                feedEl.appendChild(row);
-            });
-
-            // 5. Top Apps Ranking
-            const rankingEl = document.getElementById('appRanking');
-            rankingEl.innerHTML = '';
-            const sortedApps = Object.entries(app_totals).sort((a, b) => b[1] - a[1]).slice(0, 5);
-            sortedApps.forEach(([app, time], index) => {
-                const perc = (time / (summary.total_active_time || 1)) * 100;
-                const row = document.createElement('div');
-                row.className = "space-y-1";
-                row.innerHTML = `
-                    <div class="flex justify-between text-xs font-bold text-slate-600 mb-1">
-                        <span class="truncate">${app}</span>
-                        <span>${formatDuration(time)}</span>
-                    </div>
-                    <div class="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
-                        <div class="bg-indigo-500 h-full" style="width: ${perc}%"></div>
-                    </div>
-                `;
-                rankingEl.appendChild(row);
-            });
-
-            document.getElementById('liveIndicator').classList.remove('bg-red-100', 'text-red-600');
-            document.getElementById('liveIndicator').innerHTML = `
-                <span class="relative flex h-2 w-2">
-                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
-                    <span class="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
-                </span>
-                Live Feed
-            `;
-        }
+        let categoryChart = null, appChart = null, currentUserId = null;
+        // Resolves automatically: localhost:8000 in dev, your Render URL in prod
+        const SERVER_BASE = window.location.origin;
+        const API_BASE    = SERVER_BASE + '/api';
 
         function formatDuration(seconds) {
             const h = Math.floor(seconds / 3600);
             const m = Math.floor((seconds % 3600) / 60);
             const s = Math.floor(seconds % 60);
-            if (h > 0) return `${h}h ${m}m ${s}s`;
-            if (m > 0) return `${m}m ${s}s`;
-            return `${s}s`;
+            return `${h}h ${m}m ${s}s`;
         }
 
-        // Initialize Lucide icons
-        lucide.createIcons();
+        async function fetchUsers() {
+            try {
+                const res = await fetch(`${API_BASE}/users`);
+                const users = await res.json();
+                const listEl = document.getElementById('userList');
+                listEl.innerHTML = '';
+                users.forEach(u => {
+                    const div = document.createElement('div');
+                    div.className = 'sidebar-item flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-slate-50 transition-all text-sm text-slate-600 font-medium';
+                    div.innerHTML = `<i data-lucide="user" class="w-4 h-4"></i> ${u.user}`;
+                    div.onclick = () => selectUser(u.user);
+                    listEl.appendChild(div);
+                });
+                lucide.createIcons();
+            } catch (e) { console.error(e); }
+        }
 
-        // Start Polling
-        fetchStats();
-        setInterval(fetchStats, 15000);
+        async function selectUser(userId) {
+            currentUserId = userId;
+            document.getElementById('welcomeState').classList.add('hidden');
+            document.getElementById('dashboardState').classList.remove('hidden');
+            document.getElementById('userName').textContent = userId;
+            await loadUserData();
+        }
+
+        async function loadUserData() {
+            if (!currentUserId) return;
+            const date = document.getElementById('datePicker').value;
+            try {
+                const [sumRes, appsRes] = await Promise.all([
+                    fetch(`${API_BASE}/user-summary?user=${currentUserId}&date=${date}`),
+                    fetch(`${API_BASE}/user-apps?user=${currentUserId}&date=${date}`)
+                ]);
+                const summary = await sumRes.json();
+                const apps = await appsRes.json();
+
+                document.getElementById('kpiScore').textContent = `${summary.productivity_score}%`;
+                document.getElementById('scoreBar').style.width = `${summary.productivity_score}%`;
+                document.getElementById('kpiActive').textContent = formatDuration(summary.total_active_time);
+                document.getElementById('kpiIdle').textContent = formatDuration(summary.total_idle_time);
+                document.getElementById('kpiLocked').textContent = formatDuration(summary.total_screen_off_time || 0);
+                document.getElementById('kpiTopApp').textContent = summary.top_app;
+
+                updateCharts(apps);
+                updateTable(apps);
+            } catch (e) { console.error(e); }
+        }
+
+        function updateCharts(apps) {
+            const cats = { Productive: 0, Unproductive: 0, Neutral: 0 };
+            apps.forEach(a => cats[a.category] += a.time);
+
+            const ctxCat = document.getElementById('categoryChart').getContext('2d');
+            if (categoryChart) categoryChart.destroy();
+            categoryChart = new Chart(ctxCat, {
+                type: 'doughnut',
+                data: {
+                    labels: Object.keys(cats),
+                    datasets: [{ data: Object.values(cats), backgroundColor: ['#4f46e5', '#f43f5e', '#94a3b8'], borderWidth: 0 }]
+                },
+                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } }, cutout: '70%' }
+            });
+
+            const ctxApp = document.getElementById('appChart').getContext('2d');
+            if (appChart) appChart.destroy();
+            appChart = new Chart(ctxApp, {
+                type: 'bar',
+                data: {
+                    labels: apps.slice(0, 5).map(a => a.app),
+                    datasets: [{ data: apps.slice(0, 5).map(a => a.time), backgroundColor: '#6366f1', borderRadius: 8 }]
+                },
+                options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
+            });
+        }
+
+        function catColor(category) {
+            return category === 'Productive'   ? 'text-emerald-600 bg-emerald-50' :
+                   category === 'Unproductive' ? 'text-rose-600 bg-rose-50'       :
+                                                 'text-slate-500 bg-slate-100';
+        }
+
+        function toggleTabs(tabRowId) {
+            // All tab rows share the same data-tab-group — toggle them together
+            document.querySelectorAll(`[data-tab-group="${tabRowId}"]`).forEach(row => {
+                row.classList.toggle('hidden');
+            });
+            const chevron = document.getElementById('chevron-' + tabRowId);
+            if (chevron) {
+                const open = !document.querySelector(`[data-tab-group="${tabRowId}"]`).classList.contains('hidden');
+                chevron.style.transform = open ? 'rotate(90deg)' : 'rotate(0deg)';
+            }
+        }
+
+        function updateTable(apps) {
+            const tbody = document.getElementById('appTableBody');
+            tbody.innerHTML = '';
+
+            apps.forEach((a, idx) => {
+                const hasTabs  = a.tabs && a.tabs.length > 0;
+                const tabRowId = `tabs-${idx}`;
+
+                // ── App row ──────────────────────────────────────────────────
+                const appRow = document.createElement('tr');
+                appRow.className = 'hover:bg-slate-50 transition-colors' + (hasTabs ? ' cursor-pointer select-none' : '');
+                if (hasTabs) appRow.onclick = () => toggleTabs(tabRowId);
+
+                // Chevron (expandable) or fixed-width spacer (non-expandable) —
+                // same rendered width so app names stay left-aligned in both cases.
+                const chevronHtml = hasTabs
+                    ? `<span id="chevron-${tabRowId}"
+                              class="inline-flex items-center justify-center w-4 h-4 mr-2 text-slate-400 transition-transform duration-200"
+                              style="font-size:9px">&#9654;</span>`
+                    : `<span class="inline-block w-4 h-4 mr-2"></span>`;
+
+                appRow.innerHTML = `
+                    <td class="px-6 py-3.5 font-medium text-slate-800 overflow-hidden">
+                        <div class="flex items-center min-w-0">
+                            ${chevronHtml}
+                            <span class="truncate">${a.app}</span>
+                        </div>
+                    </td>
+                    <td class="px-6 py-3.5 text-center">
+                        <span class="px-2 py-1 rounded-full text-xs font-bold ${catColor(a.category)}">${a.category}</span>
+                    </td>
+                    <td class="px-6 py-3.5 text-right text-slate-600 font-mono text-sm">${formatDuration(a.time)}</td>
+                `;
+                tbody.appendChild(appRow);
+
+                // ── Tab rows — flat <tr> in the SAME tbody (no nested table) ──
+                // Sharing the outer table's colgroup means all columns align exactly.
+                if (hasTabs) {
+                    a.tabs.forEach(tab => {
+                        const tabRow = document.createElement('tr');
+                        tabRow.setAttribute('data-tab-group', tabRowId);
+                        tabRow.className = 'hidden bg-slate-50/60 hover:bg-slate-100/80 transition-colors';
+                        tabRow.innerHTML = `
+                            <td class="px-6 py-2.5 overflow-hidden">
+                                <div class="flex items-center gap-2 min-w-0 pl-6">
+                                    <span class="text-slate-300 shrink-0 text-xs">└</span>
+                                    <span class="truncate text-xs text-slate-500">${tab.title}</span>
+                                </div>
+                            </td>
+                            <td class="px-6 py-2.5 text-center">
+                                <span class="px-2 py-0.5 rounded-full text-xs font-bold ${catColor(tab.category)}">${tab.category}</span>
+                            </td>
+                            <td class="px-6 py-2.5 text-right text-slate-400 font-mono text-xs">${formatDuration(tab.time)}</td>
+                        `;
+                        tbody.appendChild(tabRow);
+                    });
+                }
+            });
+        }
+
+        function copyInstallCmd() {
+            const cmd = document.getElementById('installCmd').textContent;
+            navigator.clipboard.writeText(cmd).then(() => {
+                const btn = document.getElementById('copyBtn');
+                btn.innerHTML = '<i data-lucide="check" class="w-4 h-4 text-emerald-400"></i>';
+                lucide.createIcons();
+                setTimeout(() => {
+                    btn.innerHTML = '<i data-lucide="copy" class="w-4 h-4"></i>';
+                    lucide.createIcons();
+                }, 2000);
+            }).catch(() => {
+                // Fallback for browsers that block clipboard without HTTPS
+                const el = document.getElementById('installCmd');
+                el.select && el.select();
+                document.execCommand('copy');
+            });
+        }
+
+        window.onload = async () => {
+            // Wire all download / install links
+            const dlUrl     = SERVER_BASE + '/download-agent';
+            const scriptUrl = SERVER_BASE + '/install-script';
+            const oneliner  = `powershell -ExecutionPolicy Bypass -Command "irm '${SERVER_BASE}/install-script' | iex"`;
+
+            document.getElementById('downloadAgentBtn').href          = dlUrl;
+            document.getElementById('downloadAgentBtnWelcome').href   = dlUrl;
+            document.getElementById('downloadScriptBtn').href         = scriptUrl;
+            document.getElementById('downloadScriptBtnSidebar').href  = scriptUrl;
+            document.getElementById('installCmd').textContent         = oneliner;
+
+            lucide.createIcons();
+
+            // Version badge — shows server version and uptime to confirm deploys
+            try {
+                const h = await fetch(`${API_BASE}/health`);
+                const d = await h.json();
+                const started = new Date(d.started_at);
+                const mins = Math.round((Date.now() - started) / 60000);
+                const uptime = mins < 60 ? `${mins}m ago` : `${Math.round(mins/60)}h ago`;
+                document.getElementById('serverDot').className = 'w-2 h-2 rounded-full bg-green-400';
+                document.getElementById('serverVersion').textContent = `v${d.version} · up ${uptime}`;
+            } catch {
+                document.getElementById('serverDot').className = 'w-2 h-2 rounded-full bg-red-400';
+                document.getElementById('serverVersion').textContent = 'server unreachable';
+            }
+
+            // Use local date, not UTC — agent stores timestamps in local time
+            const now = new Date();
+            const localDate = now.getFullYear() + '-' +
+                String(now.getMonth() + 1).padStart(2, '0') + '-' +
+                String(now.getDate()).padStart(2, '0');
+            document.getElementById('datePicker').value = localDate;
+            await fetchUsers();
+            setInterval(async () => { if (currentUserId) await loadUserData(); }, 30000);
+        };
+        document.getElementById('datePicker').onchange = loadUserData;
     </script>
 </body>
 </html>

@@ -1,0 +1,4 @@
+fastapi==0.135.3
+uvicorn[standard]==0.44.0
+azure-data-tables==12.7.0
+pydantic

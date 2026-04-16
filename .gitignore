@@ -2,3 +2,22 @@ logs.txt
 CLAUDE.md
 user-track
 .claude
+
+# Azurite local emulator state
+__azurite_db_*.json
+__blobstorage__/
+__queuestorage__/
+AzuriteConfig
+
+# Azure Functions local config (contains connection strings — never commit)
+local.settings.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+func-venv/
+
+# PyInstaller build artifacts
+build/
+dist/
