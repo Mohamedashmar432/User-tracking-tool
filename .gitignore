@@ -20,3 +20,5 @@ func-venv/
 
 # PyInstaller build artifacts
 build/
+
+deploy.ps1
