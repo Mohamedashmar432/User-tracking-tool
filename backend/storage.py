@@ -30,8 +30,12 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+import logging
+
 from azure.data.tables import TableServiceClient
-from azure.core.exceptions import ResourceExistsError
+from azure.core.exceptions import ResourceExistsError, ResourceNotFoundError
+
+_LOG = logging.getLogger("telemetry.storage")
 
 RAW_TABLE        = "RawTelemetry"
 USER_INDEX_TABLE = "UserIndex"
@@ -247,6 +251,97 @@ class TelemetryStorage:
         deleted = self._delete_entities(raw_table, entities)
         _cache.invalidate(f"raw:{user}:{date}")
         return deleted
+
+    def rename_user(self, old_name: str, new_name: str) -> dict:
+        """
+        Rename a tracked employee in all tables.
+
+        Because Azure Table Storage uses PartitionKeys that embed the username
+        (e.g. "alice_2026-04-17"), renaming requires:
+            1. Fetch every raw event for old_name
+            2. Re-insert them under new_name partition keys
+            3. Delete the old rows
+            4. Swap the UserIndex entry
+
+        Raises ValueError if new_name is already in use.
+        Returns {"old_name", "new_name", "migrated": event_count}.
+        """
+        old = old_name.strip()
+        new = new_name.strip().lower()
+
+        if old == new:
+            return {"old_name": old, "new_name": new, "migrated": 0}
+
+        raw_table   = self.service.get_table_client(RAW_TABLE)
+        index_table = self.service.get_table_client(USER_INDEX_TABLE)
+
+        # Reject if new name already exists in UserIndex
+        existing = self.get_all_users()
+        if new in [u.lower() for u in existing]:
+            raise ValueError(f"Username '{new}' is already in use")
+
+        # Prefix-scan for every RawTelemetry row belonging to old_name
+        lo = f"{old}_"
+        hi = f"{old}_\uffff"
+        old_entities = list(raw_table.query_entities(
+            f"PartitionKey ge '{lo}' and PartitionKey lt '{hi}'"
+        ))
+
+        # Build clean copies with new PartitionKey
+        new_entities: List[Dict[str, Any]] = []
+        for e in old_entities:
+            date = e["PartitionKey"][len(old) + 1:]   # "YYYY-MM-DD"
+            new_entities.append({
+                "PartitionKey": f"{new}_{date}",
+                "RowKey":       e["RowKey"],
+                "timestamp":    str(e.get("timestamp", "")),
+                "app":          str(e.get("app",    "Unknown")),
+                "domain":       str(e.get("domain", "")),
+                "active":       bool(e.get("active", False)),
+                "locked":       bool(e.get("locked", False)),
+                "duration":     int(e.get("duration", 0)),
+                "device":       str(e.get("device", "")),
+            })
+
+        # Insert under new name
+        pk_groups: Dict[str, List] = {}
+        for e in new_entities:
+            pk_groups.setdefault(e["PartitionKey"], []).append(e)
+
+        for pk, entities in pk_groups.items():
+            for i in range(0, len(entities), 100):
+                chunk = entities[i:i + 100]
+                _submit_with_retry(raw_table, [("upsert", entity) for entity in chunk])
+
+        # Delete old rows only after new rows are safely written
+        self._delete_entities(raw_table, old_entities)
+
+        # Swap UserIndex entry
+        try:
+            old_idx  = index_table.get_entity("users", old)
+            last_seen = old_idx.get("last_seen", datetime.now(timezone.utc).isoformat())
+        except ResourceNotFoundError:
+            last_seen = datetime.now(timezone.utc).isoformat()
+
+        index_table.upsert_entity({
+            "PartitionKey": "users",
+            "RowKey":       new,
+            "last_seen":    last_seen,
+        })
+        try:
+            index_table.delete_entity("users", old)
+        except Exception:
+            pass
+
+        # Wipe cache for both names
+        stale = [k for k in list(_cache._store)
+                 if k.startswith(f"raw:{old}:") or k.startswith(f"raw:{new}:")]
+        for k in stale:
+            _cache.invalidate(k)
+        _cache.invalidate("users")
+
+        _LOG.info("rename_user: %s → %s (%d events migrated)", old, new, len(old_entities))
+        return {"old_name": old, "new_name": new, "migrated": len(old_entities)}
 
     @staticmethod
     def _delete_entities(table_client, entities: list) -> int:

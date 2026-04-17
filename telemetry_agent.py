@@ -73,9 +73,9 @@ PROGRAM_DATA       = r"C:\ProgramData\TelemetryAgent"
 INSTALL_DIR        = r"C:\Program Files\TelemetryAgent"
 SYSTEM_CONFIG_PATH = os.path.join(PROGRAM_DATA, "config.json")
 LOG_PATH           = os.path.join(PROGRAM_DATA, "agent.log")
+LAST_SEEN_PATH     = os.path.join(PROGRAM_DATA, "last_seen.json")
 
 try:
-    import win32api
     import win32gui
     import win32process
     import psutil
@@ -127,6 +127,7 @@ MAX_LOG_SIZE  = 10 * 1024 * 1024   # 10 MB
 
 # Resolution order: env var → config file → default
 INGEST_URL = os.getenv("INGEST_URL") or _cfg.get("ingest_url", "http://localhost:8000/ingest")
+AGENT_API_KEY = os.getenv("AGENT_API_KEY") or os.getenv("API_KEY") or _cfg.get("api_key", "")
 
 BROWSER_PROCESSES = {"chrome.exe", "msedge.exe", "firefox.exe", "brave.exe"}
 
@@ -203,9 +204,28 @@ def get_user_info() -> dict:
         return {"hostname": "Unknown", "username": "Unknown"}
 
 
+class _LASTINPUTINFO(ctypes.Structure):
+    _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
+
+
 def get_idle_seconds() -> int:
+    """
+    Returns seconds since the last keyboard/mouse input in this session.
+
+    Uses ctypes + LASTINPUTINFO struct directly instead of win32api.GetLastInputInfo()
+    because the pywin32 wrapper returns 0 on some Windows configurations (treating a
+    failed/uninitialised struct as 'last input at boot'), which makes
+    GetTickCount() - 0 = system_uptime, always exceeding IDLE_THRESHOLD and
+    marking every event as idle regardless of actual user activity.
+    """
     try:
-        return (win32api.GetTickCount() - win32api.GetLastInputInfo()) // 1000
+        lii = _LASTINPUTINFO()
+        lii.cbSize = ctypes.sizeof(_LASTINPUTINFO)
+        if not ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii)):
+            return 0
+        tick    = ctypes.windll.kernel32.GetTickCount()
+        idle_ms = (tick - lii.dwTime) & 0xFFFFFFFF  # unsigned 32-bit wrap-safe subtraction
+        return idle_ms // 1000
     except Exception:
         return 0
 
@@ -403,6 +423,60 @@ def flush_backup(username: str, device: str) -> int:
     return recovered
 
 
+# ── Last-seen state (startup gap detection) ─────────────────────────────────────
+# Written on every event so we can compute how long the machine was off/asleep
+# the next time the agent starts.
+
+def _save_last_seen(timestamp: str, app: str) -> None:
+    """Persist the timestamp of the most recent logged event to disk."""
+    try:
+        with open(LAST_SEEN_PATH, "w", encoding="utf-8") as f:
+            json.dump({"timestamp": timestamp, "app": app}, f)
+    except Exception:
+        pass
+
+
+def _startup_gap_events() -> list:
+    """
+    On agent start, read the last-seen timestamp and return a synthetic
+    locked/screen-off event covering any gap since the agent was last running.
+
+    This captures time the machine was asleep or the agent was stopped between
+    sessions — time that would otherwise be silently lost.
+
+    Returns an empty list if there is no last-seen file or the gap is too small
+    to be meaningful (< 2 × LOG_INTERVAL to avoid noise from normal restarts).
+    """
+    try:
+        with open(LAST_SEEN_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        last_ts_str = data.get("timestamp", "")
+        if not last_ts_str:
+            return []
+        # Parse — handle both offset-aware and naive ISO strings
+        last_ts = datetime.fromisoformat(last_ts_str)
+        if last_ts.tzinfo is None:
+            last_ts = last_ts.replace(tzinfo=timezone.utc)
+        now     = datetime.now(timezone.utc)
+        gap_sec = int((now - last_ts).total_seconds())
+        if gap_sec < LOG_INTERVAL * 2:          # < 2 min — noise, skip
+            return []
+        _LOG.info("Startup gap: %ds since last event (%s) — inserting screen-off time", gap_sec, last_ts_str)
+        return [{
+            "app":       "Screen Off",
+            "domain":    "",
+            "active":    False,
+            "locked":    True,
+            "duration":  gap_sec,
+            "timestamp": last_ts_str,  # gap started when agent last logged
+        }]
+    except (FileNotFoundError, KeyError, ValueError):
+        return []
+    except Exception as e:
+        _LOG.warning("Startup gap check failed: %s", e)
+        return []
+
+
 # ── Agent-side aggregation ───────────────────────────────────────────────────────
 
 def aggregate_events(events: list) -> list:
@@ -459,6 +533,7 @@ def flush_batch(user: str, device: str, batch: list) -> bool:
         resp = requests.post(
             INGEST_URL,
             json={"user": user, "device": device, "events": batch},
+            headers={"X-API-Key": AGENT_API_KEY},
             timeout=10,
         )
         if resp.status_code in (200, 202):
@@ -564,23 +639,29 @@ def install(server_url: str = None) -> None:
             _LOG.error("  Permission denied creating %s — run as Administrator", d)
             sys.exit(1)
 
-    # 2. Resolve base server URL
-    base = (server_url or _base_url()).rstrip("/")
-
-    # Try to pull the canonical URL from /agent-config (Option B)
+    # 2. Resolve base server URL and fetch agent API key from /agent-config
+    base      = (server_url or _base_url()).rstrip("/")
+    agent_key = ""
     try:
         resp = requests.get(f"{base}/agent-config", timeout=10)
         if resp.ok:
-            fetched = resp.json().get("server_url", "").rstrip("/")
+            cfg_data  = resp.json()
+            fetched   = cfg_data.get("server_url", "").rstrip("/")
+            agent_key = cfg_data.get("agent_api_key", "")
             if fetched:
                 _LOG.info("  /agent-config returned server_url: %s", fetched)
                 base = fetched
+            if agent_key:
+                _LOG.info("  /agent-config provided agent_api_key (length %d)", len(agent_key))
+            else:
+                _LOG.warning("  /agent-config did not return agent_api_key — set AGENT_API_KEY on server")
     except Exception as e:
         _LOG.warning("  Could not fetch /agent-config: %s — using %s", e, base)
 
     # 3. Write config.json
     config = {
         "ingest_url":     f"{base}/ingest",
+        "api_key":        agent_key,
         "idle_threshold": IDLE_THRESHOLD,
         "tick_interval":  TICK_INTERVAL,
         "log_interval":   LOG_INTERVAL,
@@ -699,8 +780,43 @@ def main():
     # Replay any batches that were saved offline during a previous run
     flush_backup(username, hostname)
 
+    # ── Startup gap: capture time the machine was asleep / agent was stopped ────
+    # If last_seen.json shows the agent last ran > 2 min ago, inject a synthetic
+    # Screen Off event so the dashboard reflects the full offline period.
+    gap_events = _startup_gap_events()
+    if gap_events:
+        ok = flush_batch(username, hostname, gap_events)
+        if not ok:
+            save_to_backup(username, hostname, gap_events)
+
+    _last_tick_wall = time.time()   # wall-clock anchor for sleep-resume detection
+
     try:
         while True:
+            # ── Sleep/resume gap detection ───────────────────────────────────────
+            # When Windows suspends the machine, this process is frozen.
+            # time.sleep() returns immediately after wake, but the wall clock
+            # has jumped forward by the sleep duration.  Detect the jump and
+            # inject a Screen Off event so the gap shows in the dashboard.
+            _now_wall   = time.time()
+            _tick_delta = _now_wall - _last_tick_wall
+            _last_tick_wall = _now_wall
+            if _tick_delta > TICK_INTERVAL * 3:          # >15 s gap → system slept
+                _sleep_gap = int(_tick_delta)
+                _gap_start = datetime.fromtimestamp(
+                    _now_wall - _tick_delta, tz=timezone.utc
+                ).isoformat()
+                event_buffer.append({
+                    "app":       "Screen Off",
+                    "domain":    "",
+                    "active":    False,
+                    "locked":    True,
+                    "duration":  _sleep_gap,
+                    "timestamp": _gap_start,
+                })
+                elapsed_since_flush += _sleep_gap
+                _LOG.info("Sleep/resume gap: %ds of screen-off time captured", _sleep_gap)
+
             # ── Sample foreground state ──────────────────────────────────────────
             is_locked = is_workstation_locked()
             idle_secs = get_idle_seconds()
@@ -746,6 +862,8 @@ def main():
                     "duration":  LOG_INTERVAL,
                     "timestamp": now,
                 })
+                # Persist timestamp so next startup can detect any gap (sleep/shutdown)
+                _save_last_seen(now, state.current_app)
 
                 # ── Flush triggers ───────────────────────────────────────────────
                 # 1. Time-based: FLUSH_INTERVAL seconds have elapsed since last flush

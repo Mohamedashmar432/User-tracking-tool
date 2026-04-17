@@ -1,5 +1,6 @@
 {
     "ingest_url":     "http://localhost:8000/ingest",
+    "api_key":        "",
     "idle_threshold": 300,
     "tick_interval":  5,
     "log_interval":   60,

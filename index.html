@@ -11,426 +11,1588 @@
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
         body { font-family: 'Inter', sans-serif; }
         .chart-container { position: relative; height: 280px; width: 100%; }
-        .sidebar-item.active { background-color: #eef2ff; color: #4f46e5; border-right: 4px solid #4f46e5; }
+        .nav-item { display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-radius: 10px; font-size: 13px; font-weight: 500; color: #64748b; cursor: pointer; transition: all .15s; width: 100%; text-align: left; }
+        .nav-item:hover { background: #f1f5f9; color: #334155; }
+        .nav-item.active { background: #eef2ff; color: #4f46e5; font-weight: 600; }
+        .sidebar-user { display: flex; align-items: center; gap: 10px; padding: 7px 16px; font-size: 13px; font-weight: 500; color: #475569; cursor: pointer; transition: background .12s; border-right: 3px solid transparent; }
+        .sidebar-user:hover { background: #f8fafc; }
+        .sidebar-user.active { background: #eef2ff; color: #4f46e5; border-right-color: #4f46e5; }
+        .sidebar-group { display: flex; align-items: center; gap: 9px; padding: 7px 16px; font-size: 12.5px; font-weight: 500; color: #475569; cursor: pointer; transition: background .12s; border-right: 3px solid transparent; }
+        .sidebar-group:hover { background: #f8fafc; }
+        .sidebar-group.active { background: #fdf4ff; color: #9333ea; border-right-color: #9333ea; }
     </style>
 </head>
 <body class="bg-slate-100 text-slate-900">
 
-    <div class="flex h-screen overflow-hidden">
-        <!-- Sidebar -->
-        <aside class="w-72 bg-white border-r border-slate-200 flex flex-col">
-            <div class="p-6 border-b border-slate-100">
-                <div class="flex items-center gap-2 mb-6">
-                    <div class="bg-indigo-600 p-2 rounded-lg text-white">
-                        <i data-lucide="layout-dashboard" class="w-5 h-5"></i>
-                    </div>
-                    <h1 class="font-bold text-lg text-slate-800">ProdAnalytics</h1>
-                </div>
-                <div class="relative">
-                    <i data-lucide="search" class="absolute left-3 top-3 w-4 h-4 text-slate-400"></i>
-                    <input type="text" id="userSearch" placeholder="Search employee..."
-                           class="w-full pl-9 pr-4 py-2 text-sm border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500">
-                </div>
+<!-- =====================================================================
+     LOGIN PAGE
+===================================================================== -->
+<div id="loginPage" class="hidden min-h-screen flex items-center justify-center bg-gradient-to-br from-indigo-50 to-slate-100">
+    <div class="bg-white rounded-3xl shadow-xl border border-slate-200 w-full max-w-sm p-8">
+        <div class="flex flex-col items-center mb-8">
+            <div class="bg-indigo-600 p-3 rounded-2xl text-white mb-4">
+                <i data-lucide="layout-dashboard" class="w-7 h-7"></i>
             </div>
-            <div id="userList" class="flex-1 overflow-y-auto py-2">
-                <div class="p-4 text-center text-slate-400 text-sm">Loading users...</div>
+            <h1 class="text-2xl font-bold text-slate-800">ProdAnalytics</h1>
+            <p class="text-sm text-slate-400 mt-1">Sign in to your dashboard</p>
+        </div>
+        <form id="loginForm" onsubmit="submitLogin(event)" class="space-y-4">
+            <div>
+                <label class="block text-xs font-semibold text-slate-500 uppercase mb-1.5">Username</label>
+                <input id="loginUsername" type="text" autocomplete="username" required
+                       class="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+                       placeholder="admin">
             </div>
-            <!-- Agent installer — pinned to sidebar bottom -->
-            <div class="p-4 border-t border-slate-100 space-y-2">
-                <a id="downloadAgentBtn" href="#"
-                   class="flex items-center justify-center gap-2 w-full px-4 py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700 active:scale-95 transition-all">
-                    <i data-lucide="download" class="w-4 h-4"></i>
-                    Download Agent (.exe)
-                </a>
-                <a id="downloadScriptBtnSidebar" href="#"
-                   class="flex items-center justify-center gap-2 w-full px-4 py-2 border border-slate-200 text-slate-600 text-sm font-medium rounded-xl hover:bg-slate-50 active:scale-95 transition-all">
-                    <i data-lucide="file-code" class="w-4 h-4"></i>
-                    Download Installer (.ps1)
-                </a>
-                <p class="text-xs text-slate-400 text-center">Run the .ps1 as Administrator to auto-configure</p>
-                <!-- Version badge — fetched from /api/health on load -->
-                <div class="flex items-center justify-center gap-1.5 pt-1">
-                    <span id="serverDot" class="w-2 h-2 rounded-full bg-slate-300"></span>
-                    <span id="serverVersion" class="text-xs text-slate-400">checking...</span>
-                </div>
+            <div>
+                <label class="block text-xs font-semibold text-slate-500 uppercase mb-1.5">Password</label>
+                <input id="loginPassword" type="password" autocomplete="current-password" required
+                       class="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+                       placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;">
             </div>
-        </aside>
+            <div id="loginError" class="hidden text-xs text-rose-600 bg-rose-50 px-3 py-2 rounded-lg"></div>
+            <button type="submit" id="loginBtn"
+                    class="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl text-sm transition-all active:scale-95">
+                Sign in
+            </button>
+        </form>
+    </div>
+</div>
 
-        <!-- Main -->
-        <main class="flex-1 overflow-y-auto bg-slate-50">
-            <div id="welcomeState" class="h-full flex flex-col items-center justify-center p-8 text-center gap-6">
-                <div class="bg-white p-8 rounded-3xl shadow-sm border border-slate-200 max-w-lg w-full">
-                    <div class="bg-indigo-50 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 text-indigo-600">
-                        <i data-lucide="users" class="w-8 h-8"></i>
-                    </div>
-                    <h2 class="text-2xl font-bold text-slate-800 mb-2">Employee Analytics</h2>
-                    <p class="text-slate-500">Select an employee from the list to analyze their productivity trends.</p>
-                </div>
+<!-- =====================================================================
+     MAIN APP
+===================================================================== -->
+<div id="appShell" class="hidden" style="display:none;flex-direction:row;height:100vh;overflow:hidden;">
 
-                <!-- Agent installer card -->
-                <div class="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 max-w-lg w-full text-left">
-                    <div class="flex items-center gap-3 mb-4">
-                        <div class="bg-emerald-50 p-2.5 rounded-xl text-emerald-600 shrink-0">
-                            <i data-lucide="terminal" class="w-5 h-5"></i>
-                        </div>
+    <!-- ── SIDEBAR ─────────────────────────────────────────────────── -->
+    <aside class="w-64 bg-white border-r border-slate-200 flex flex-col" style="flex-shrink:0;">
+
+        <!-- Logo -->
+        <div class="px-5 py-4 border-b border-slate-100 flex-shrink-0">
+            <div class="flex items-center gap-2.5">
+                <div class="bg-indigo-600 p-2 rounded-lg text-white shrink-0">
+                    <i data-lucide="layout-dashboard" class="w-4 h-4"></i>
+                </div>
+                <span class="font-bold text-slate-800 text-base">ProdAnalytics</span>
+            </div>
+        </div>
+
+        <!-- Employee search -->
+        <div class="px-4 pt-3 pb-2 flex-shrink-0">
+            <div class="relative">
+                <i data-lucide="search" class="absolute left-3 top-2.5 w-3.5 h-3.5 text-slate-400 pointer-events-none"></i>
+                <input type="text" id="userSearch" placeholder="Search employee..."
+                       oninput="filterEmployees(this.value)"
+                       class="w-full pl-8 pr-7 py-2 text-xs border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 bg-slate-50">
+                <button id="searchClear" onclick="clearSearch()"
+                        class="hidden absolute right-2 top-1.5 p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors">
+                    <i data-lucide="x" class="w-3 h-3"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- Middle: Employees + Groups share remaining height -->
+        <div class="flex-1 flex flex-col overflow-hidden min-h-0">
+
+            <!-- Employee section -->
+            <div class="flex flex-col min-h-0" style="flex: 3;">
+                <div class="px-4 pb-1 flex-shrink-0">
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Employees</p>
+                </div>
+                <div id="userList" class="overflow-y-auto flex-1 min-h-0 pb-1">
+                    <div class="px-5 py-3 text-xs text-slate-400">Loading...</div>
+                </div>
+            </div>
+
+            <!-- Groups section -->
+            <div class="border-t border-slate-100 flex flex-col min-h-0" style="flex: 2;">
+                <div class="px-4 pt-2 pb-1 flex items-center justify-between flex-shrink-0">
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Groups</p>
+                    <button id="createGroupBtn" onclick="openCreateGroupModal()" title="New group"
+                            class="p-1 rounded-lg text-slate-400 hover:text-purple-600 hover:bg-purple-50 transition-colors">
+                        <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+                    </button>
+                </div>
+                <div id="groupList" class="overflow-y-auto flex-1 min-h-0 pb-1">
+                    <div class="px-5 py-2 text-xs text-slate-400">Loading...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bottom nav -->
+        <div class="border-t border-slate-100 px-3 py-3 space-y-0.5 flex-shrink-0">
+            <button id="navUserMgmt" onclick="showView('users')" class="nav-item w-full">
+                <i data-lucide="shield" class="w-4 h-4 shrink-0"></i>
+                User Management
+            </button>
+            <button id="navAgent" onclick="showView('agent')" class="nav-item w-full">
+                <i data-lucide="bot" class="w-4 h-4 shrink-0"></i>
+                Agent
+            </button>
+        </div>
+
+        <!-- Footer: version + logout -->
+        <div class="border-t border-slate-100 px-4 py-3 flex items-center justify-between flex-shrink-0">
+            <div class="flex items-center gap-1.5">
+                <span id="serverDot" class="w-2 h-2 rounded-full bg-slate-300 shrink-0"></span>
+                <span id="serverVersion" class="text-xs text-slate-400">checking...</span>
+            </div>
+            <button onclick="logout()" class="flex items-center gap-1.5 text-xs text-slate-400 hover:text-rose-500 transition-colors" title="Sign out">
+                <span id="loggedInAs" class="max-w-20 truncate"></span>
+                <i data-lucide="log-out" class="w-3.5 h-3.5 shrink-0"></i>
+            </button>
+        </div>
+    </aside>
+
+    <!-- ── MAIN CONTENT ────────────────────────────────────────────── -->
+    <main class="flex-1 overflow-y-auto bg-slate-50">
+
+        <!-- ============================================================
+             VIEW: HOME — Team Overview (default)
+        ============================================================ -->
+        <div id="viewHome" class="p-8">
+            <div class="flex items-center justify-between mb-6">
+                <div>
+                    <h2 class="text-2xl font-bold text-slate-900">Team Overview</h2>
+                    <p class="text-sm text-slate-400 mt-0.5">Today's productivity across all employees</p>
+                </div>
+                <div class="flex items-center gap-3">
+                    <input type="date" id="overviewDatePicker"
+                           class="px-3 py-2 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500 bg-white">
+                    <button onclick="loadOverview()" class="p-2 border border-slate-200 rounded-lg hover:bg-white transition-all text-slate-500" title="Refresh">
+                        <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Stats row -->
+            <div class="grid grid-cols-3 gap-4 mb-6">
+                <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide">Total Employees</p>
+                    <p id="statTotal" class="text-3xl font-black text-slate-800 mt-1">—</p>
+                </div>
+                <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide">Active Now</p>
+                    <p id="statActive" class="text-3xl font-black text-emerald-600 mt-1">—</p>
+                </div>
+                <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide">Avg Productivity</p>
+                    <p id="statAvgScore" class="text-3xl font-black text-indigo-600 mt-1">—</p>
+                </div>
+            </div>
+
+            <!-- User table -->
+            <div class="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+                <div class="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+                    <h3 class="font-bold text-slate-800">Productivity Rankings</h3>
+                    <span id="overviewLoading" class="text-xs text-slate-400 flex items-center gap-1.5">
+                        <i data-lucide="loader-2" class="w-3 h-3 animate-spin"></i> Loading...
+                    </span>
+                </div>
+                <table class="w-full text-sm">
+                    <thead class="bg-slate-50 text-slate-500 uppercase text-xs font-semibold">
+                        <tr>
+                            <th class="px-6 py-3 text-left">Employee</th>
+                            <th class="px-6 py-3 text-center">Productivity</th>
+                            <th class="px-6 py-3 text-center">Active Time</th>
+                            <th class="px-6 py-3 text-center">Status</th>
+                            <th class="px-6 py-3"></th>
+                        </tr>
+                    </thead>
+                    <tbody id="overviewTableBody" class="divide-y divide-slate-100"></tbody>
+                </table>
+                <div id="overviewEmpty" class="hidden p-12 text-center text-slate-400">
+                    <i data-lucide="users" class="w-10 h-10 mx-auto mb-3 text-slate-300"></i>
+                    <p class="font-medium">No employees found</p>
+                    <p class="text-xs mt-1">Install the agent on employee machines to start tracking</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- ============================================================
+             VIEW: USER DETAIL
+        ============================================================ -->
+        <div id="viewUserDetail" class="hidden p-8 space-y-8">
+            <header class="flex items-center justify-between">
+                <div class="flex items-center gap-4">
+                    <button onclick="showView('home')" class="p-2 rounded-xl border border-slate-200 hover:bg-white text-slate-500 transition-all">
+                        <i data-lucide="arrow-left" class="w-4 h-4"></i>
+                    </button>
+                    <div class="flex items-center gap-3">
                         <div>
-                            <h3 class="font-semibold text-slate-800 leading-tight">Install Tracking Agent</h3>
-                            <p class="text-xs text-slate-400 mt-0.5">On each employee's Windows machine — run once as Administrator</p>
+                            <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">User Profile</p>
+                            <h2 id="userName" class="text-2xl font-extrabold text-slate-900">—</h2>
                         </div>
-                    </div>
-
-                    <!-- Step list -->
-                    <ol class="space-y-3 mb-4">
-                        <li class="flex gap-3 text-sm">
-                            <span class="shrink-0 w-5 h-5 rounded-full bg-indigo-100 text-indigo-600 text-xs font-bold flex items-center justify-center">1</span>
-                            <span class="text-slate-600">Open <strong>PowerShell</strong> as <strong>Administrator</strong> on the employee machine</span>
-                        </li>
-                        <li class="flex gap-3 text-sm">
-                            <span class="shrink-0 w-5 h-5 rounded-full bg-indigo-100 text-indigo-600 text-xs font-bold flex items-center justify-center">2</span>
-                            <span class="text-slate-600">Paste and run this command:</span>
-                        </li>
-                    </ol>
-
-                    <!-- One-liner command box -->
-                    <div class="flex items-center gap-2 bg-slate-900 rounded-xl px-4 py-3 mb-4">
-                        <i data-lucide="terminal" class="w-3.5 h-3.5 text-slate-500 shrink-0"></i>
-                        <code id="installCmd" class="flex-1 text-xs text-emerald-400 font-mono break-all">Loading…</code>
-                        <button id="copyBtn" onclick="copyInstallCmd()"
-                                class="shrink-0 p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700 transition-all"
-                                title="Copy to clipboard">
-                            <i data-lucide="copy" class="w-4 h-4"></i>
+                        <button id="userDetailRenameBtn" onclick="openRenameModal(_currentUserId)"
+                                class="hidden p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all mt-1" title="Rename employee">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                         </button>
                     </div>
-
-                    <ol class="space-y-3 mb-5" start="3">
-                        <li class="flex gap-3 text-sm">
-                            <span class="shrink-0 w-5 h-5 rounded-full bg-indigo-100 text-indigo-600 text-xs font-bold flex items-center justify-center">3</span>
-                            <span class="text-slate-600">Accept the UAC prompt — the script downloads the agent, configures the server URL, and registers a scheduled task to start automatically at login</span>
-                        </li>
-                    </ol>
-
-                    <!-- Divider + fallback download -->
-                    <div class="flex items-center gap-3 pt-4 border-t border-slate-100">
-                        <span class="text-xs text-slate-400">Prefer manual setup?</span>
-                        <a id="downloadAgentBtnWelcome" href="#"
-                           class="inline-flex items-center gap-1.5 text-xs text-indigo-600 hover:text-indigo-800 font-medium transition-colors">
-                            <i data-lucide="download" class="w-3.5 h-3.5"></i>
-                            Download telemetry_agent.exe
-                        </a>
-                        <span class="text-slate-200">|</span>
-                        <a id="downloadScriptBtn" href="#"
-                           class="inline-flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-700 font-medium transition-colors">
-                            <i data-lucide="file-code" class="w-3.5 h-3.5"></i>
-                            Download install_agent.ps1
-                        </a>
+                </div>
+                <div class="flex items-center gap-3">
+                    <input type="date" id="datePicker" class="px-3 py-2 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500 bg-white">
+                    <div class="flex items-center gap-2 px-3 py-2 rounded-full bg-indigo-50 text-indigo-600 text-xs font-bold uppercase">
+                        <i data-lucide="refresh-cw" class="w-3 h-3 animate-spin"></i>
+                        Live
                     </div>
+                </div>
+            </header>
+
+            <!-- KPI Cards -->
+            <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-5">
+                <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                    <p class="text-xs font-bold text-slate-400 uppercase">Productivity</p>
+                    <p id="kpiScore" class="text-3xl font-black text-slate-800 mt-1">0%</p>
+                    <div class="mt-3 w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                        <div id="scoreBar" class="bg-indigo-600 h-full transition-all" style="width:0%"></div>
+                    </div>
+                </div>
+                <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                    <p class="text-xs font-bold text-slate-400 uppercase">Active Time</p>
+                    <p id="kpiActive" class="text-3xl font-black text-slate-800 mt-1">—</p>
+                </div>
+                <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                    <p class="text-xs font-bold text-slate-400 uppercase">Idle Time</p>
+                    <p class="text-xs text-slate-400 mt-0.5">Screen on, no input</p>
+                    <p id="kpiIdle" class="text-3xl font-black text-slate-800 mt-1">—</p>
+                </div>
+                <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                    <p class="text-xs font-bold text-slate-400 uppercase">Screen Off</p>
+                    <p class="text-xs text-slate-400 mt-0.5">Away from desk</p>
+                    <p id="kpiLocked" class="text-3xl font-black text-slate-800 mt-1">—</p>
+                </div>
+                <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                    <p class="text-xs font-bold text-slate-400 uppercase">Current Status</p>
+                    <div id="kpiStatusBadge" class="mt-3"></div>
+                    <p id="kpiStatusSince" class="text-xs text-slate-400 mt-2"></p>
                 </div>
             </div>
 
-            <div id="dashboardState" class="hidden p-8 space-y-8">
-                <header class="flex justify-between items-end">
+            <!-- Charts -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <!-- Time Distribution doughnut (Productive vs Unproductive) -->
+                <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+                    <h3 class="font-bold text-slate-800 mb-5">Time Distribution</h3>
+                    <div class="chart-container"><canvas id="categoryChart"></canvas></div>
+                </div>
+                <!-- Top Apps analytical bar chart -->
+                <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+                    <div class="flex items-center justify-between mb-1">
+                        <h3 class="font-bold text-slate-800">Top Apps by Usage</h3>
+                        <div class="flex items-center gap-3 text-xs text-slate-400">
+                            <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-sm bg-emerald-400 inline-block"></span>Productive</span>
+                            <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-sm bg-rose-400 inline-block"></span>Unproductive</span>
+                        </div>
+                    </div>
+                    <p class="text-xs text-slate-400 mb-4">Duration per application — hover for details</p>
+                    <div class="chart-container"><canvas id="appChart"></canvas></div>
+                </div>
+            </div>
+
+            <!-- App table -->
+            <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                <div class="px-6 py-4 border-b border-slate-100 font-bold text-slate-800">Application Details</div>
+                <table class="w-full text-left text-sm table-fixed">
+                    <colgroup><col><col class="w-32"><col class="w-32"></colgroup>
+                    <thead class="bg-slate-50 text-slate-500 uppercase text-xs font-semibold">
+                        <tr>
+                            <th class="px-6 py-3">App / Tab</th>
+                            <th class="px-6 py-3 text-center">Category</th>
+                            <th class="px-6 py-3 text-right">Duration</th>
+                        </tr>
+                    </thead>
+                    <tbody id="appTableBody" class="divide-y divide-slate-100"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- ============================================================
+             VIEW: GROUP DETAIL
+        ============================================================ -->
+        <div id="viewGroup" class="hidden p-8 space-y-8">
+            <header class="flex items-center justify-between">
+                <div class="flex items-center gap-4">
+                    <button onclick="showView('home')" class="p-2 rounded-xl border border-slate-200 hover:bg-white text-slate-500 transition-all">
+                        <i data-lucide="arrow-left" class="w-4 h-4"></i>
+                    </button>
                     <div>
-                        <p class="text-sm font-medium text-slate-500 uppercase tracking-wider">User Profile</p>
-                        <h2 id="userName" class="text-3xl font-extrabold text-slate-900">User Name</h2>
-                    </div>
-                    <div class="flex items-center gap-3">
-                        <input type="date" id="datePicker" class="px-3 py-2 border border-slate-200 rounded-lg text-sm outline-none">
-                        <div id="refreshIndicator" class="flex items-center gap-2 px-3 py-2 rounded-full bg-indigo-50 text-indigo-600 text-xs font-bold uppercase tracking-wider">
-                            <i data-lucide="refresh-cw" class="w-3 h-3 animate-spin"></i>
-                            Live
-                        </div>
-                    </div>
-                </header>
-
-                <div class="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-5 gap-6">
-                    <div class="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                        <span class="text-xs font-bold text-slate-400 uppercase">Productivity Score</span>
-                        <div class="flex items-baseline gap-2 mt-2">
-                            <span id="kpiScore" class="text-4xl font-black text-slate-800">0%</span>
-                        </div>
-                        <div class="mt-4 w-full bg-slate-100 h-2 rounded-full overflow-hidden">
-                            <div id="scoreBar" class="bg-indigo-600 h-full transition-all" style="width: 0%"></div>
-                        </div>
-                    </div>
-                    <div class="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                        <span class="text-xs font-bold text-slate-400 uppercase">Active Time</span>
-                        <h3 id="kpiActive" class="text-4xl font-black text-slate-800 mt-2">0h 0m</h3>
-                    </div>
-                    <div class="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                        <span class="text-xs font-bold text-slate-400 uppercase">Idle Time</span>
-                        <p class="text-xs text-slate-400 mt-0.5">Screen on, no input</p>
-                        <h3 id="kpiIdle" class="text-4xl font-black text-slate-800 mt-2">0h 0m</h3>
-                    </div>
-                    <div class="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                        <span class="text-xs font-bold text-slate-400 uppercase">Screen Off / Locked</span>
-                        <p class="text-xs text-slate-400 mt-0.5">Away from desk</p>
-                        <h3 id="kpiLocked" class="text-4xl font-black text-slate-800 mt-2">0h 0m</h3>
-                    </div>
-                    <div class="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                        <span class="text-xs font-bold text-slate-400 uppercase">Top App</span>
-                        <h3 id="kpiTopApp" class="text-2xl font-bold text-slate-800 mt-2 truncate">-</h3>
+                        <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Group</p>
+                        <h2 id="groupName" class="text-2xl font-extrabold text-slate-900">—</h2>
                     </div>
                 </div>
-
-                <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                    <div class="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
-                        <h3 class="font-bold text-slate-800 mb-6">Time Distribution</h3>
-                        <div class="chart-container">
-                            <canvas id="categoryChart"></canvas>
-                        </div>
-                    </div>
-                    <div class="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
-                        <h3 class="font-bold text-slate-800 mb-6">Top Applications</h3>
-                        <div class="chart-container">
-                            <canvas id="appChart"></canvas>
-                        </div>
-                    </div>
+                <div class="flex items-center gap-3">
+                    <input type="date" id="groupDatePicker" class="px-3 py-2 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500 bg-white">
+                    <button id="addMemberBtn" onclick="openAddMemberModal()"
+                            class="flex items-center gap-2 px-3 py-2 border border-purple-200 text-purple-600 text-xs font-semibold rounded-xl hover:bg-purple-50 transition-all">
+                        <i data-lucide="user-plus" class="w-3.5 h-3.5"></i>
+                        Add Member
+                    </button>
+                    <button id="deleteGroupBtn" onclick="confirmDeleteGroup()"
+                            class="flex items-center gap-2 px-3 py-2 border border-rose-200 text-rose-500 text-xs font-semibold rounded-xl hover:bg-rose-50 transition-all">
+                        <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                        Delete Group
+                    </button>
                 </div>
+            </header>
 
-                <div class="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
-                    <div class="p-6 border-b border-slate-100 font-bold text-slate-800">Application Details</div>
-                    <table class="w-full text-left text-sm table-fixed">
-                        <colgroup>
-                            <col>                    <!-- App / Tab — takes remaining space -->
-                            <col class="w-36">       <!-- Category — fixed -->
-                            <col class="w-36">       <!-- Duration — fixed -->
-                        </colgroup>
-                        <thead class="bg-slate-50 text-slate-500 uppercase text-xs font-semibold">
-                            <tr>
-                                <th class="px-6 py-4">App / Tab</th>
-                                <th class="px-6 py-4 text-center">Category</th>
-                                <th class="px-6 py-4 text-right">Duration</th>
-                            </tr>
-                        </thead>
-                        <tbody id="appTableBody" class="divide-y divide-slate-100"></tbody>
-                    </table>
+            <!-- Group stats row -->
+            <div class="grid grid-cols-3 gap-4">
+                <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide">Members</p>
+                    <p id="groupStatMembers" class="text-3xl font-black text-slate-800 mt-1">—</p>
+                </div>
+                <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide">Active Now</p>
+                    <p id="groupStatActive" class="text-3xl font-black text-emerald-600 mt-1">—</p>
+                </div>
+                <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide">Avg Productivity</p>
+                    <p id="groupStatScore" class="text-3xl font-black text-indigo-600 mt-1">—</p>
                 </div>
             </div>
-        </main>
+
+            <!-- Members table -->
+            <div class="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+                <div class="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+                    <h3 class="font-bold text-slate-800">Member Productivity</h3>
+                    <span id="groupLoading" class="text-xs text-slate-400 flex items-center gap-1.5">
+                        <i data-lucide="loader-2" class="w-3 h-3 animate-spin"></i> Loading...
+                    </span>
+                </div>
+                <table class="w-full text-sm">
+                    <thead class="bg-slate-50 text-slate-500 uppercase text-xs font-semibold">
+                        <tr>
+                            <th class="px-6 py-3 text-left">Employee</th>
+                            <th class="px-6 py-3 text-center">Productivity</th>
+                            <th class="px-6 py-3 text-center">Active Time</th>
+                            <th class="px-6 py-3 text-center">Status</th>
+                            <th class="px-6 py-3 text-right">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="groupTableBody" class="divide-y divide-slate-100"></tbody>
+                </table>
+                <div id="groupEmpty" class="hidden p-12 text-center text-slate-400">
+                    <i data-lucide="users" class="w-10 h-10 mx-auto mb-3 text-slate-300"></i>
+                    <p class="font-medium">No members in this group</p>
+                    <p class="text-xs mt-1">Click "Add Member" to add employees</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- ============================================================
+             VIEW: USER MANAGEMENT
+        ============================================================ -->
+        <div id="viewUsers" class="hidden p-8 space-y-6">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h2 class="text-2xl font-bold text-slate-900">User Management</h2>
+                    <p class="text-sm text-slate-400 mt-1">Manage who can access this dashboard</p>
+                </div>
+                <button onclick="openAddUserModal()"
+                        class="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700 transition-all">
+                    <i data-lucide="user-plus" class="w-4 h-4"></i>
+                    Add User
+                </button>
+            </div>
+            <div class="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+                <table class="w-full text-left text-sm">
+                    <thead class="bg-slate-50 text-slate-500 uppercase text-xs font-semibold">
+                        <tr>
+                            <th class="px-6 py-4">Username</th>
+                            <th class="px-6 py-4">Role</th>
+                            <th class="px-6 py-4">Created</th>
+                            <th class="px-6 py-4 text-right">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="authUserTableBody" class="divide-y divide-slate-100"></tbody>
+                </table>
+                <div id="authUserEmpty" class="hidden p-10 text-center text-slate-400 text-sm">No users found.</div>
+            </div>
+        </div>
+
+        <!-- ============================================================
+             VIEW: AGENT SETUP
+        ============================================================ -->
+        <div id="viewAgent" class="hidden p-8 space-y-6">
+            <div>
+                <h2 class="text-2xl font-bold text-slate-900">Agent Setup</h2>
+                <p class="text-sm text-slate-400 mt-1">Deploy the tracking agent on employee Windows machines</p>
+            </div>
+
+            <div class="grid grid-cols-3 gap-4">
+                <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+                    <div class="w-8 h-8 bg-indigo-100 rounded-xl flex items-center justify-center text-indigo-600 mb-3">
+                        <i data-lucide="download" class="w-4 h-4"></i>
+                    </div>
+                    <h4 class="font-semibold text-slate-800 text-sm">1. Download</h4>
+                    <p class="text-xs text-slate-400 mt-1 leading-relaxed">Get the agent executable or use the one-click PowerShell installer</p>
+                </div>
+                <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+                    <div class="w-8 h-8 bg-indigo-100 rounded-xl flex items-center justify-center text-indigo-600 mb-3">
+                        <i data-lucide="terminal" class="w-4 h-4"></i>
+                    </div>
+                    <h4 class="font-semibold text-slate-800 text-sm">2. Install</h4>
+                    <p class="text-xs text-slate-400 mt-1 leading-relaxed">Run as Administrator — auto-configures server URL and API key, registers a startup task</p>
+                </div>
+                <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+                    <div class="w-8 h-8 bg-emerald-100 rounded-xl flex items-center justify-center text-emerald-600 mb-3">
+                        <i data-lucide="activity" class="w-4 h-4"></i>
+                    </div>
+                    <h4 class="font-semibold text-slate-800 text-sm">3. Done</h4>
+                    <p class="text-xs text-slate-400 mt-1 leading-relaxed">Agent starts immediately and on every Windows login. Employee appears in dashboard within 2 minutes</p>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
+                <div class="flex items-center gap-3 mb-5">
+                    <div class="bg-slate-900 p-2.5 rounded-xl">
+                        <i data-lucide="terminal" class="w-4 h-4 text-emerald-400"></i>
+                    </div>
+                    <div>
+                        <h3 class="font-bold text-slate-800">One-Click PowerShell Installer</h3>
+                        <p class="text-xs text-slate-400 mt-0.5">Run as Administrator on each employee machine</p>
+                    </div>
+                </div>
+                <div class="flex items-center gap-3 bg-slate-900 rounded-2xl px-5 py-4 mb-5">
+                    <i data-lucide="chevron-right" class="w-4 h-4 text-slate-500 shrink-0"></i>
+                    <code id="installCmd" class="flex-1 text-sm text-emerald-400 font-mono break-all">Loading...</code>
+                    <button id="copyBtn" onclick="copyInstallCmd()"
+                            class="shrink-0 p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700 transition-all" title="Copy">
+                        <i data-lucide="copy" class="w-4 h-4"></i>
+                    </button>
+                </div>
+                <div class="flex items-start gap-3 bg-amber-50 border border-amber-100 rounded-2xl px-4 py-3">
+                    <i data-lucide="info" class="w-4 h-4 text-amber-500 shrink-0 mt-0.5"></i>
+                    <p class="text-xs text-amber-700 leading-relaxed">
+                        The script will request Administrator access via UAC. It downloads the agent, configures the server URL and API key automatically, registers a scheduled task, and starts the agent immediately — no reboot required.
+                    </p>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
+                <h3 class="font-bold text-slate-800 mb-4">Manual Download</h3>
+                <div class="flex gap-3">
+                    <a id="agentDownloadBtn" href="#"
+                       class="flex items-center gap-2.5 px-5 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl text-sm transition-all">
+                        <i data-lucide="download" class="w-4 h-4"></i>
+                        telemetry_agent.exe
+                    </a>
+                    <a id="scriptDownloadBtn" href="#"
+                       class="flex items-center gap-2.5 px-5 py-3 border border-slate-200 hover:bg-slate-50 text-slate-700 font-semibold rounded-xl text-sm transition-all">
+                        <i data-lucide="file-code" class="w-4 h-4"></i>
+                        install_agent.ps1
+                    </a>
+                </div>
+                <p class="text-xs text-slate-400 mt-3">
+                    After downloading the EXE, run:
+                    <code class="bg-slate-100 px-1.5 py-0.5 rounded text-slate-600">telemetry_agent.exe --install --server-url &lt;your-server&gt;</code>
+                </p>
+            </div>
+
+            <div class="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
+                <h3 class="font-bold text-slate-800 mb-4">How the Agent Works</h3>
+                <div class="grid grid-cols-2 gap-6 text-sm">
+                    <div class="space-y-3">
+                        <div class="flex gap-3">
+                            <span class="shrink-0 w-5 h-5 rounded-full bg-indigo-100 text-indigo-600 text-xs font-bold flex items-center justify-center mt-0.5">1</span>
+                            <div><p class="font-medium text-slate-700">Samples every 5 seconds</p><p class="text-xs text-slate-400 mt-0.5">Checks foreground window, idle time, lock state</p></div>
+                        </div>
+                        <div class="flex gap-3">
+                            <span class="shrink-0 w-5 h-5 rounded-full bg-indigo-100 text-indigo-600 text-xs font-bold flex items-center justify-center mt-0.5">2</span>
+                            <div><p class="font-medium text-slate-700">Builds events every 60 s</p><p class="text-xs text-slate-400 mt-0.5">Aggregates samples into a single event per minute</p></div>
+                        </div>
+                        <div class="flex gap-3">
+                            <span class="shrink-0 w-5 h-5 rounded-full bg-indigo-100 text-indigo-600 text-xs font-bold flex items-center justify-center mt-0.5">3</span>
+                            <div><p class="font-medium text-slate-700">Sends every 2 minutes</p><p class="text-xs text-slate-400 mt-0.5">Batch upload to server, or on app switch</p></div>
+                        </div>
+                    </div>
+                    <div class="space-y-3">
+                        <div class="flex gap-3">
+                            <span class="shrink-0 w-5 h-5 rounded-full bg-emerald-100 text-emerald-600 text-xs font-bold flex items-center justify-center mt-0.5">&#10003;</span>
+                            <div><p class="font-medium text-slate-700">Offline resilient</p><p class="text-xs text-slate-400 mt-0.5">Saves batches locally if server unreachable, replays on reconnect</p></div>
+                        </div>
+                        <div class="flex gap-3">
+                            <span class="shrink-0 w-5 h-5 rounded-full bg-emerald-100 text-emerald-600 text-xs font-bold flex items-center justify-center mt-0.5">&#10003;</span>
+                            <div><p class="font-medium text-slate-700">Sleep/wake aware</p><p class="text-xs text-slate-400 mt-0.5">Detects system sleep and records screen-off time accurately</p></div>
+                        </div>
+                        <div class="flex gap-3">
+                            <span class="shrink-0 w-5 h-5 rounded-full bg-emerald-100 text-emerald-600 text-xs font-bold flex items-center justify-center mt-0.5">&#10003;</span>
+                            <div><p class="font-medium text-slate-700">Auto-start on login</p><p class="text-xs text-slate-400 mt-0.5">Registered as a Windows Scheduled Task, runs on every logon</p></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </main>
+</div><!-- /appShell -->
+
+<!-- =====================================================================
+     MODALS
+===================================================================== -->
+
+<!-- Add Dashboard User -->
+<div id="addUserModal" class="hidden fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+    <div class="bg-white rounded-3xl shadow-2xl w-full max-w-sm p-8">
+        <h3 class="text-lg font-bold text-slate-800 mb-6">Add Dashboard User</h3>
+        <form onsubmit="submitAddUser(event)" class="space-y-4">
+            <div>
+                <label class="block text-xs font-semibold text-slate-500 uppercase mb-1.5">Username</label>
+                <input id="newUsername" type="text" required autocomplete="off"
+                       class="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500" placeholder="e.g. john">
+            </div>
+            <div>
+                <label class="block text-xs font-semibold text-slate-500 uppercase mb-1.5">Password</label>
+                <input id="newPassword" type="password" required minlength="8"
+                       class="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500" placeholder="Min 8 characters">
+            </div>
+            <div>
+                <label class="block text-xs font-semibold text-slate-500 uppercase mb-1.5">Role</label>
+                <select id="newRole" class="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500 bg-white">
+                    <option value="viewer">Viewer — read-only</option>
+                    <option value="admin">Admin — full access</option>
+                </select>
+            </div>
+            <div id="addUserError" class="hidden text-xs text-rose-600 bg-rose-50 px-3 py-2 rounded-lg"></div>
+            <div class="flex gap-3 pt-2">
+                <button type="button" onclick="closeAddUserModal()" class="flex-1 py-2.5 border border-slate-200 text-slate-600 font-semibold rounded-xl text-sm hover:bg-slate-50">Cancel</button>
+                <button type="submit" class="flex-1 py-2.5 bg-indigo-600 text-white font-semibold rounded-xl text-sm hover:bg-indigo-700">Create</button>
+            </div>
+        </form>
     </div>
+</div>
 
-    <script>
-        let categoryChart = null, appChart = null, currentUserId = null;
-        // Resolves automatically: localhost:8000 in dev, your Render URL in prod
-        const SERVER_BASE = window.location.origin;
-        const API_BASE    = SERVER_BASE + '/api';
+<!-- Change Password -->
+<div id="changePwModal" class="hidden fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+    <div class="bg-white rounded-3xl shadow-2xl w-full max-w-sm p-8">
+        <h3 class="text-lg font-bold text-slate-800 mb-1">Change Password</h3>
+        <p class="text-sm text-slate-400 mb-6">for <strong id="changePwUsername"></strong></p>
+        <form onsubmit="submitChangePassword(event)" class="space-y-4">
+            <div>
+                <label class="block text-xs font-semibold text-slate-500 uppercase mb-1.5">New Password</label>
+                <input id="changePwValue" type="password" required minlength="8"
+                       class="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500" placeholder="Min 8 characters">
+            </div>
+            <div id="changePwError" class="hidden text-xs text-rose-600 bg-rose-50 px-3 py-2 rounded-lg"></div>
+            <div class="flex gap-3 pt-2">
+                <button type="button" onclick="closeChangePwModal()" class="flex-1 py-2.5 border border-slate-200 text-slate-600 font-semibold rounded-xl text-sm hover:bg-slate-50">Cancel</button>
+                <button type="submit" class="flex-1 py-2.5 bg-indigo-600 text-white font-semibold rounded-xl text-sm hover:bg-indigo-700">Save</button>
+            </div>
+        </form>
+    </div>
+</div>
 
-        function formatDuration(seconds) {
-            const h = Math.floor(seconds / 3600);
-            const m = Math.floor((seconds % 3600) / 60);
-            const s = Math.floor(seconds % 60);
-            return `${h}h ${m}m ${s}s`;
-        }
+<!-- Delete Dashboard User Confirm -->
+<div id="deleteModal" class="hidden fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+    <div class="bg-white rounded-3xl shadow-2xl w-full max-w-sm p-8">
+        <div class="flex items-center gap-3 mb-4">
+            <div class="bg-rose-50 p-2.5 rounded-xl text-rose-600"><i data-lucide="trash-2" class="w-5 h-5"></i></div>
+            <h3 class="text-lg font-bold text-slate-800">Delete User</h3>
+        </div>
+        <p class="text-sm text-slate-500 mb-6">Delete <strong id="deleteUsername"></strong>? This cannot be undone.</p>
+        <div id="deleteError" class="hidden text-xs text-rose-600 bg-rose-50 px-3 py-2 rounded-lg mb-4"></div>
+        <div class="flex gap-3">
+            <button onclick="closeDeleteModal()" class="flex-1 py-2.5 border border-slate-200 text-slate-600 font-semibold rounded-xl text-sm hover:bg-slate-50">Cancel</button>
+            <button onclick="confirmDelete()" class="flex-1 py-2.5 bg-rose-600 text-white font-semibold rounded-xl text-sm hover:bg-rose-700">Delete</button>
+        </div>
+    </div>
+</div>
 
-        async function fetchUsers() {
+<!-- Rename Employee Modal -->
+<div id="renameModal" class="hidden fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+    <div class="bg-white rounded-3xl shadow-2xl w-full max-w-sm p-8">
+        <div class="flex items-center gap-3 mb-2">
+            <div class="bg-indigo-50 p-2.5 rounded-xl text-indigo-600"><i data-lucide="pencil" class="w-5 h-5"></i></div>
+            <h3 class="text-lg font-bold text-slate-800">Rename Employee</h3>
+        </div>
+        <p class="text-sm text-slate-400 mb-6">Current: <strong id="renameOldName" class="text-slate-700"></strong></p>
+        <form onsubmit="submitRename(event)" class="space-y-4">
+            <div>
+                <label class="block text-xs font-semibold text-slate-500 uppercase mb-1.5">New Username</label>
+                <input id="renameNewName" type="text" required autocomplete="off"
+                       class="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+                       placeholder="Enter new username">
+                <p class="text-xs text-slate-400 mt-1.5">Lowercase only · all historical data will be migrated</p>
+            </div>
+            <div id="renameError" class="hidden text-xs text-rose-600 bg-rose-50 px-3 py-2 rounded-lg"></div>
+            <div class="flex gap-3 pt-2">
+                <button type="button" onclick="closeRenameModal()" class="flex-1 py-2.5 border border-slate-200 text-slate-600 font-semibold rounded-xl text-sm hover:bg-slate-50">Cancel</button>
+                <button type="submit" id="renameSaveBtn" class="flex-1 py-2.5 bg-indigo-600 text-white font-semibold rounded-xl text-sm hover:bg-indigo-700">Rename</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Create Group Modal -->
+<div id="createGroupModal" class="hidden fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+    <div class="bg-white rounded-3xl shadow-2xl w-full max-w-sm p-8">
+        <h3 class="text-lg font-bold text-slate-800 mb-6">Create Group</h3>
+        <form onsubmit="submitCreateGroup(event)" class="space-y-4">
+            <div>
+                <label class="block text-xs font-semibold text-slate-500 uppercase mb-1.5">Group Name</label>
+                <input id="newGroupName" type="text" required autocomplete="off"
+                       class="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-purple-500"
+                       placeholder="e.g. Engineering, Design">
+            </div>
+            <div id="createGroupError" class="hidden text-xs text-rose-600 bg-rose-50 px-3 py-2 rounded-lg"></div>
+            <div class="flex gap-3 pt-2">
+                <button type="button" onclick="closeCreateGroupModal()" class="flex-1 py-2.5 border border-slate-200 text-slate-600 font-semibold rounded-xl text-sm hover:bg-slate-50">Cancel</button>
+                <button type="submit" class="flex-1 py-2.5 bg-purple-600 text-white font-semibold rounded-xl text-sm hover:bg-purple-700">Create</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Add Member Modal -->
+<div id="addMemberModal" class="hidden fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+    <div class="bg-white rounded-3xl shadow-2xl w-full max-w-sm p-8">
+        <h3 class="text-lg font-bold text-slate-800 mb-1">Add Member</h3>
+        <p class="text-sm text-slate-400 mb-6">to <strong id="addMemberGroupName"></strong></p>
+        <form onsubmit="submitAddMember(event)" class="space-y-4">
+            <div>
+                <label class="block text-xs font-semibold text-slate-500 uppercase mb-1.5">Employee</label>
+                <select id="addMemberSelect"
+                        class="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-purple-500 bg-white">
+                </select>
+            </div>
+            <div id="addMemberError" class="hidden text-xs text-rose-600 bg-rose-50 px-3 py-2 rounded-lg"></div>
+            <div class="flex gap-3 pt-2">
+                <button type="button" onclick="closeAddMemberModal()" class="flex-1 py-2.5 border border-slate-200 text-slate-600 font-semibold rounded-xl text-sm hover:bg-slate-50">Cancel</button>
+                <button type="submit" class="flex-1 py-2.5 bg-purple-600 text-white font-semibold rounded-xl text-sm hover:bg-purple-700">Add</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Delete Group Confirm -->
+<div id="deleteGroupModal" class="hidden fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+    <div class="bg-white rounded-3xl shadow-2xl w-full max-w-sm p-8">
+        <div class="flex items-center gap-3 mb-4">
+            <div class="bg-rose-50 p-2.5 rounded-xl text-rose-600"><i data-lucide="trash-2" class="w-5 h-5"></i></div>
+            <h3 class="text-lg font-bold text-slate-800">Delete Group</h3>
+        </div>
+        <p class="text-sm text-slate-500 mb-6">Delete group <strong id="deleteGroupName"></strong>? Members are not affected.</p>
+        <div id="deleteGroupError" class="hidden text-xs text-rose-600 bg-rose-50 px-3 py-2 rounded-lg mb-4"></div>
+        <div class="flex gap-3">
+            <button onclick="closeDeleteGroupModal()" class="flex-1 py-2.5 border border-slate-200 text-slate-600 font-semibold rounded-xl text-sm hover:bg-slate-50">Cancel</button>
+            <button onclick="submitDeleteGroup()" class="flex-1 py-2.5 bg-rose-600 text-white font-semibold rounded-xl text-sm hover:bg-rose-700">Delete</button>
+        </div>
+    </div>
+</div>
+
+<!-- =====================================================================
+     JAVASCRIPT
+===================================================================== -->
+<script>
+// ── Constants ────────────────────────────────────────────────────────────────────
+const SERVER_BASE = window.location.origin;
+const API_BASE    = SERVER_BASE + '/api';
+
+// ── Auth state ───────────────────────────────────────────────────────────────────
+let authToken   = localStorage.getItem('token') || '';
+let currentUser = JSON.parse(localStorage.getItem('user') || 'null');
+
+function setAuth(token, user) {
+    authToken = token; currentUser = user;
+    localStorage.setItem('token', token);
+    localStorage.setItem('user', JSON.stringify(user));
+}
+function logout() {
+    authToken = ''; currentUser = null;
+    localStorage.removeItem('token'); localStorage.removeItem('user');
+    showLoginPage();
+}
+
+// ── Fetch wrapper ─────────────────────────────────────────────────────────────────
+async function apiFetch(url, options = {}) {
+    const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+    if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+    const res = await fetch(url, { ...options, headers });
+    if (res.status === 401) { logout(); throw new Error('Session expired'); }
+    return res;
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────────
+function getTodayDate() {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+function formatDuration(s) {
+    if (!s || s <= 0) return '0m';
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+    return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+function catColor(cat) {
+    return cat === 'Productive'   ? 'text-emerald-600 bg-emerald-50' :
+           cat === 'Unproductive' ? 'text-rose-600 bg-rose-50'       :
+                                    'text-slate-500 bg-slate-100';
+}
+
+// ── Status logic ──────────────────────────────────────────────────────────────────
+const STATUS_ONLINE_MINUTES = 5;
+
+function computeStatus(timeline) {
+    if (!timeline || !timeline.length) return { status: 'offline', since: null };
+    const last     = timeline[timeline.length - 1];
+    const lastTime = new Date(last.timestamp + (last.timestamp.endsWith('Z') ? '' : 'Z'));
+    const minsAgo  = (Date.now() - lastTime.getTime()) / 60000;
+    if (minsAgo > STATUS_ONLINE_MINUTES) return { status: 'offline', since: lastTime };
+    if (last.locked) return { status: 'offline',   since: lastTime };
+    if (last.active) return { status: 'available', since: lastTime };
+    return { status: 'away', since: lastTime };
+}
+
+function statusBadge(status, large = false) {
+    const sz  = large ? 'px-3 py-1.5 text-sm gap-2' : 'px-2.5 py-1 text-xs gap-1.5';
+    const dot = large ? 'w-2 h-2' : 'w-1.5 h-1.5';
+    const map = {
+        available: { label: 'Available', cls: 'bg-emerald-50 text-emerald-700', dot: 'bg-emerald-400 animate-pulse' },
+        away:      { label: 'Away',      cls: 'bg-amber-50  text-amber-700',    dot: 'bg-amber-400'  },
+        offline:   { label: 'Offline',   cls: 'bg-slate-100 text-slate-500',    dot: 'bg-slate-300'  },
+    };
+    const s = map[status] || map.offline;
+    return `<span class="inline-flex items-center ${sz} rounded-full font-semibold ${s.cls}">
+        <span class="${dot} ${s.dot} rounded-full shrink-0"></span>${s.label}
+    </span>`;
+}
+
+// ── Login ─────────────────────────────────────────────────────────────────────────
+function showLoginPage() {
+    document.getElementById('loginPage').classList.remove('hidden');
+    document.getElementById('appShell').style.display = 'none';
+    setTimeout(() => document.getElementById('loginUsername').focus(), 50);
+}
+
+async function submitLogin(e) {
+    e.preventDefault();
+    const btn = document.getElementById('loginBtn');
+    const err = document.getElementById('loginError');
+    err.classList.add('hidden');
+    btn.disabled = true; btn.textContent = 'Signing in...';
+    try {
+        const res = await fetch(`${SERVER_BASE}/auth/login`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                username: document.getElementById('loginUsername').value.trim(),
+                password: document.getElementById('loginPassword').value,
+            }),
+        });
+        if (!res.ok) { const d = await res.json().catch(()=>({})); throw new Error(d.detail || 'Invalid credentials'); }
+        const data = await res.json();
+        setAuth(data.token, { username: data.username, role: data.role });
+        await initApp();
+    } catch (ex) { err.textContent = ex.message; err.classList.remove('hidden'); }
+    finally { btn.disabled = false; btn.textContent = 'Sign in'; }
+}
+
+// ── App init ──────────────────────────────────────────────────────────────────────
+async function initApp() {
+    try {
+        const res = await apiFetch(`${SERVER_BASE}/auth/me`);
+        if (!res.ok) { logout(); return; }
+        currentUser = await res.json();
+        localStorage.setItem('user', JSON.stringify(currentUser));
+    } catch { logout(); return; }
+
+    document.getElementById('loginPage').classList.add('hidden');
+    document.getElementById('appShell').style.display = 'flex';
+    lucide.createIcons();
+
+    const isAdmin = currentUser.role === 'admin';
+    if (!isAdmin) {
+        document.getElementById('navUserMgmt').style.display    = 'none';
+        document.getElementById('createGroupBtn').style.display = 'none';
+    } else {
+        document.getElementById('userDetailRenameBtn').classList.remove('hidden');
+    }
+    document.getElementById('loggedInAs').textContent = currentUser.username;
+
+    // Wire download links
+    const base = SERVER_BASE;
+    document.getElementById('agentDownloadBtn').href  = `${base}/download-agent`;
+    document.getElementById('scriptDownloadBtn').href = `${base}/install-script`;
+    document.getElementById('installCmd').textContent =
+        `powershell -ExecutionPolicy Bypass -Command "irm '${base}/install-script' | iex"`;
+
+    // Version badge
+    try {
+        const h = await fetch(`${API_BASE}/health`);
+        const d = await h.json();
+        const mins = Math.round((Date.now() - new Date(d.started_at)) / 60000);
+        const up   = mins < 60 ? `${mins}m` : `${Math.round(mins/60)}h`;
+        document.getElementById('serverDot').className       = 'w-2 h-2 rounded-full bg-green-400 shrink-0';
+        document.getElementById('serverVersion').textContent  = `v${d.version} · ${up}`;
+    } catch {
+        document.getElementById('serverDot').className       = 'w-2 h-2 rounded-full bg-red-400 shrink-0';
+        document.getElementById('serverVersion').textContent  = 'offline';
+    }
+
+    const today = getTodayDate();
+    document.getElementById('datePicker').value         = today;
+    document.getElementById('overviewDatePicker').value = today;
+    document.getElementById('groupDatePicker').value    = today;
+
+    await Promise.all([fetchSidebarUsers(), fetchGroups()]);
+    showView('home');
+
+    setInterval(() => {
+        if (_activeView === 'home')       loadOverview();
+        if (_activeView === 'userDetail' && _currentUserId)  loadUserData();
+        if (_activeView === 'group'      && _currentGroupId) loadGroupData();
+    }, 60000);
+}
+
+// ── View management ───────────────────────────────────────────────────────────────
+let _activeView = '';
+
+function showView(view) {
+    _activeView = view;
+    const views = ['viewHome','viewUserDetail','viewGroup','viewUsers','viewAgent'];
+    views.forEach(id => document.getElementById(id).classList.add('hidden'));
+    const el = document.getElementById(`view${view.charAt(0).toUpperCase() + view.slice(1)}`);
+    if (el) el.classList.remove('hidden');
+
+    const navMap = { users: 'navUserMgmt', agent: 'navAgent' };
+    ['navUserMgmt','navAgent'].forEach(id => {
+        const n = document.getElementById(id);
+        if (n) n.classList.remove('active');
+    });
+    if (navMap[view]) document.getElementById(navMap[view]).classList.add('active');
+
+    if (view !== 'userDetail') {
+        document.querySelectorAll('.sidebar-user').forEach(el => el.classList.remove('active'));
+    }
+    if (view !== 'group') {
+        document.querySelectorAll('.sidebar-group').forEach(el => el.classList.remove('active'));
+    }
+
+    if (view === 'home')   loadOverview();
+    if (view === 'users')  loadAuthUsers();
+    if (view === 'group' && _currentGroupId) loadGroupData();
+}
+
+// ── Sidebar employees ─────────────────────────────────────────────────────────────
+let _allEmployees  = [];
+let _currentUserId = null;
+
+async function fetchSidebarUsers() {
+    try {
+        const res   = await apiFetch(`${API_BASE}/users`);
+        _allEmployees = (await res.json()).map(u => u.user);
+        const q = document.getElementById('userSearch').value;
+        renderSidebarUsers(q ? _allEmployees.filter(u => u.toLowerCase().includes(q.toLowerCase())) : _allEmployees);
+    } catch(e) { if (e.message !== 'Session expired') console.error(e); }
+}
+
+function renderSidebarUsers(users) {
+    const list = document.getElementById('userList');
+    list.innerHTML = '';
+    if (!users.length) {
+        list.innerHTML = '<div class="px-5 py-3 text-xs text-slate-400">No employees yet</div>';
+        return;
+    }
+    users.forEach(u => {
+        const div = document.createElement('div');
+        div.className    = 'sidebar-user';
+        div.dataset.username = u;
+        div.innerHTML = `<i data-lucide="user" class="w-3.5 h-3.5 shrink-0 text-slate-400"></i><span class="truncate">${u}</span>`;
+        div.onclick = () => selectUser(u);
+        list.appendChild(div);
+    });
+    lucide.createIcons();
+}
+
+function filterEmployees(q) {
+    const clear = document.getElementById('searchClear');
+    clear.classList.toggle('hidden', !q);
+    const filtered = q
+        ? _allEmployees.filter(u => u.toLowerCase().includes(q.toLowerCase()))
+        : _allEmployees;
+    renderSidebarUsers(filtered);
+}
+
+function clearSearch() {
+    document.getElementById('userSearch').value = '';
+    document.getElementById('searchClear').classList.add('hidden');
+    renderSidebarUsers(_allEmployees);
+    document.getElementById('userSearch').focus();
+}
+
+// ── Sidebar groups ────────────────────────────────────────────────────────────────
+let _allGroups     = [];
+let _currentGroupId = null;
+
+async function fetchGroups() {
+    try {
+        const res  = await apiFetch(`${API_BASE}/groups`);
+        _allGroups = await res.json();
+        renderSidebarGroups(_allGroups);
+    } catch(e) { if (e.message !== 'Session expired') console.error(e); }
+}
+
+function renderSidebarGroups(groups) {
+    const list = document.getElementById('groupList');
+    list.innerHTML = '';
+    if (!groups.length) {
+        list.innerHTML = '<div class="px-5 py-2 text-xs text-slate-400">No groups yet</div>';
+        return;
+    }
+    groups.forEach(g => {
+        const div = document.createElement('div');
+        div.className = 'sidebar-group';
+        div.dataset.groupId = g.id;
+        div.innerHTML = `
+            <i data-lucide="users" class="w-3.5 h-3.5 shrink-0 text-slate-400"></i>
+            <span class="truncate flex-1">${g.name}</span>
+            <span class="text-xs text-slate-400 shrink-0">${g.members.length}</span>`;
+        div.onclick = () => selectGroup(g.id);
+        list.appendChild(div);
+    });
+    lucide.createIcons();
+}
+
+async function selectGroup(groupId) {
+    _currentGroupId = groupId;
+    showView('group');
+    document.querySelectorAll('.sidebar-group').forEach(el => {
+        el.classList.toggle('active', el.dataset.groupId === groupId);
+    });
+    const g = _allGroups.find(x => x.id === groupId);
+    document.getElementById('groupName').textContent = g ? g.name : groupId;
+}
+
+// ── Overview (home) ───────────────────────────────────────────────────────────────
+async function loadOverview() {
+    const date    = document.getElementById('overviewDatePicker').value;
+    const loading = document.getElementById('overviewLoading');
+    const tbody   = document.getElementById('overviewTableBody');
+    const empty   = document.getElementById('overviewEmpty');
+    loading.classList.remove('hidden');
+    tbody.innerHTML = '';
+    empty.classList.add('hidden');
+
+    try {
+        const res   = await apiFetch(`${API_BASE}/users`);
+        const users = await res.json();
+
+        if (!users.length) { empty.classList.remove('hidden'); loading.classList.add('hidden'); return; }
+
+        const rows = await Promise.all(users.map(async u => {
             try {
-                const res = await fetch(`${API_BASE}/users`);
-                const users = await res.json();
-                const listEl = document.getElementById('userList');
-                listEl.innerHTML = '';
-                users.forEach(u => {
-                    const div = document.createElement('div');
-                    div.className = 'sidebar-item flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-slate-50 transition-all text-sm text-slate-600 font-medium';
-                    div.innerHTML = `<i data-lucide="user" class="w-4 h-4"></i> ${u.user}`;
-                    div.onclick = () => selectUser(u.user);
-                    listEl.appendChild(div);
-                });
-                lucide.createIcons();
-            } catch (e) { console.error(e); }
-        }
-
-        async function selectUser(userId) {
-            currentUserId = userId;
-            document.getElementById('welcomeState').classList.add('hidden');
-            document.getElementById('dashboardState').classList.remove('hidden');
-            document.getElementById('userName').textContent = userId;
-            await loadUserData();
-        }
-
-        async function loadUserData() {
-            if (!currentUserId) return;
-            const date = document.getElementById('datePicker').value;
-            try {
-                const [sumRes, appsRes] = await Promise.all([
-                    fetch(`${API_BASE}/user-summary?user=${currentUserId}&date=${date}`),
-                    fetch(`${API_BASE}/user-apps?user=${currentUserId}&date=${date}`)
+                const [sumRes, tlRes] = await Promise.all([
+                    apiFetch(`${API_BASE}/user-summary?user=${u.user}&date=${date}`),
+                    apiFetch(`${API_BASE}/user-timeline?user=${u.user}&date=${date}`),
                 ]);
-                const summary = await sumRes.json();
-                const apps = await appsRes.json();
+                const summary  = sumRes.ok ? await sumRes.json() : null;
+                const timeline = tlRes.ok  ? await tlRes.json()  : [];
+                const { status } = computeStatus(timeline);
+                return { username: u.user, summary, status };
+            } catch { return { username: u.user, summary: null, status: 'offline' }; }
+        }));
 
-                document.getElementById('kpiScore').textContent = `${summary.productivity_score}%`;
-                document.getElementById('scoreBar').style.width = `${summary.productivity_score}%`;
-                document.getElementById('kpiActive').textContent = formatDuration(summary.total_active_time);
-                document.getElementById('kpiIdle').textContent = formatDuration(summary.total_idle_time);
-                document.getElementById('kpiLocked').textContent = formatDuration(summary.total_screen_off_time || 0);
-                document.getElementById('kpiTopApp').textContent = summary.top_app;
+        const order = { available: 0, away: 1, offline: 2 };
+        rows.sort((a, b) => {
+            const so = order[a.status] - order[b.status];
+            if (so !== 0) return so;
+            return (b.summary?.productivity_score ?? -1) - (a.summary?.productivity_score ?? -1);
+        });
 
-                updateCharts(apps);
-                updateTable(apps);
-            } catch (e) { console.error(e); }
+        const scored      = rows.filter(r => r.summary);
+        const activeCount = rows.filter(r => r.status === 'available').length;
+        const avgScore    = scored.length ? Math.round(scored.reduce((s,r) => s + r.summary.productivity_score, 0) / scored.length) : 0;
+        document.getElementById('statTotal').textContent    = rows.length;
+        document.getElementById('statActive').textContent   = activeCount;
+        document.getElementById('statAvgScore').textContent = scored.length ? `${avgScore}%` : '—';
+
+        rows.forEach(r => {
+            const score      = r.summary?.productivity_score ?? null;
+            const activeTime = r.summary?.total_active_time  ?? null;
+            const tr = document.createElement('tr');
+            tr.className = 'hover:bg-slate-50 transition-colors cursor-pointer';
+            tr.onclick   = () => selectUser(r.username);
+            tr.innerHTML = `
+                <td class="px-6 py-4">
+                    <div class="flex items-center gap-3">
+                        <div class="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold text-sm shrink-0">${r.username[0].toUpperCase()}</div>
+                        <span class="font-medium text-slate-800">${r.username}</span>
+                    </div>
+                </td>
+                <td class="px-6 py-4 text-center">
+                    ${score !== null ? `
+                        <div class="flex items-center justify-center gap-2">
+                            <div class="w-20 bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                                <div class="h-full rounded-full ${score >= 60 ? 'bg-emerald-500' : 'bg-rose-400'}" style="width:${score}%"></div>
+                            </div>
+                            <span class="font-semibold text-slate-700 text-sm tabular-nums">${score}%</span>
+                        </div>` : '<span class="text-slate-300 text-sm">No data</span>'}
+                </td>
+                <td class="px-6 py-4 text-center text-sm text-slate-500">${activeTime !== null ? formatDuration(activeTime) : '—'}</td>
+                <td class="px-6 py-4 text-center">${statusBadge(r.status)}</td>
+                <td class="px-6 py-4 text-right">
+                    <div class="flex items-center justify-end gap-2">
+                        ${currentUser?.role === 'admin' ? `
+                        <button onclick="event.stopPropagation(); openRenameModal('${r.username}')"
+                                class="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all" title="Rename">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                        </button>` : ''}
+                        <button class="text-xs text-indigo-600 hover:text-indigo-800 font-semibold px-3 py-1.5 rounded-lg hover:bg-indigo-50 transition-all">View details →</button>
+                    </div>
+                </td>`;
+            tbody.appendChild(tr);
+        });
+    } catch (e) { if (e.message !== 'Session expired') console.error(e); }
+    loading.classList.add('hidden');
+}
+
+// ── User detail ───────────────────────────────────────────────────────────────────
+let categoryChart = null, appChart = null;
+
+async function selectUser(userId) {
+    _currentUserId = userId;
+    showView('userDetail');
+    document.querySelectorAll('.sidebar-user').forEach(el => {
+        el.classList.toggle('active', el.dataset.username === userId);
+    });
+    document.getElementById('userName').textContent = userId;
+    await loadUserData();
+}
+
+async function loadUserData() {
+    if (!_currentUserId) return;
+    const date = document.getElementById('datePicker').value;
+    try {
+        const [sumRes, appsRes, tlRes] = await Promise.all([
+            apiFetch(`${API_BASE}/user-summary?user=${_currentUserId}&date=${date}`),
+            apiFetch(`${API_BASE}/user-apps?user=${_currentUserId}&date=${date}`),
+            apiFetch(`${API_BASE}/user-timeline?user=${_currentUserId}&date=${date}`),
+        ]);
+
+        // Status card
+        const timeline = tlRes.ok ? await tlRes.json() : [];
+        const { status, since } = computeStatus(timeline);
+        document.getElementById('kpiStatusBadge').innerHTML = statusBadge(status, true);
+        if (since) {
+            const minsAgo = Math.round((Date.now() - since.getTime()) / 60000);
+            const label   = status === 'available' ? 'Active' : status === 'away' ? 'Idle since' : 'Last seen';
+            document.getElementById('kpiStatusSince').textContent =
+                minsAgo < 1  ? `${label} just now` :
+                minsAgo < 60 ? `${label} ${minsAgo}m ago` :
+                               `${label} ${Math.round(minsAgo/60)}h ago`;
+        } else {
+            document.getElementById('kpiStatusSince').textContent = 'No data today';
         }
 
-        function updateCharts(apps) {
-            const cats = { Productive: 0, Unproductive: 0, Neutral: 0 };
-            apps.forEach(a => cats[a.category] += a.time);
+        // Summary KPIs
+        if (sumRes.ok) {
+            const s = await sumRes.json();
+            document.getElementById('kpiScore').textContent  = `${s.productivity_score}%`;
+            document.getElementById('scoreBar').style.width  = `${s.productivity_score}%`;
+            document.getElementById('kpiActive').textContent = formatDuration(s.total_active_time);
+            document.getElementById('kpiIdle').textContent   = formatDuration(s.total_idle_time);
+            document.getElementById('kpiLocked').textContent = formatDuration(s.total_screen_off_time || 0);
+        } else {
+            ['kpiScore','kpiActive','kpiIdle','kpiLocked'].forEach(id => document.getElementById(id).textContent = '—');
+            document.getElementById('scoreBar').style.width = '0%';
+        }
 
-            const ctxCat = document.getElementById('categoryChart').getContext('2d');
-            if (categoryChart) categoryChart.destroy();
-            categoryChart = new Chart(ctxCat, {
-                type: 'doughnut',
-                data: {
-                    labels: Object.keys(cats),
-                    datasets: [{ data: Object.values(cats), backgroundColor: ['#4f46e5', '#f43f5e', '#94a3b8'], borderWidth: 0 }]
+        if (appsRes.ok) {
+            const apps = await appsRes.json();
+            updateCharts(apps);
+            updateTable(apps);
+        }
+    } catch (e) { if (e.message !== 'Session expired') console.error(e); }
+}
+
+// ── Charts ────────────────────────────────────────────────────────────────────────
+function barColor(cat, alpha = 0.8) {
+    if (cat === 'Productive')   return `rgba(16, 185, 129, ${alpha})`;   // emerald
+    if (cat === 'Unproductive') return `rgba(239, 68, 68, ${alpha})`;    // rose
+    return `rgba(99, 102, 241, ${alpha})`;                               // indigo fallback
+}
+
+function updateCharts(apps) {
+    // ── Doughnut: Productive vs Unproductive ─────────────────────────────────
+    const cats = { Productive: 0, Unproductive: 0 };
+    apps.forEach(a => {
+        if (a.category in cats) cats[a.category] += a.time;
+        else cats['Productive'] += a.time; // fallback
+    });
+
+    const ctxC = document.getElementById('categoryChart').getContext('2d');
+    if (categoryChart) categoryChart.destroy();
+    categoryChart = new Chart(ctxC, {
+        type: 'doughnut',
+        data: {
+            labels: ['Productive', 'Unproductive'],
+            datasets: [{
+                data: [cats.Productive, cats.Unproductive],
+                backgroundColor: ['rgba(16, 185, 129, 0.85)', 'rgba(239, 68, 68, 0.85)'],
+                borderWidth: 0,
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { position: 'bottom', labels: { font: { size: 12 } } },
+                tooltip: {
+                    callbacks: {
+                        label: (ctx) => ` ${ctx.label}: ${formatDuration(ctx.raw)} (${
+                            ctx.raw > 0 ? Math.round(ctx.raw / (cats.Productive + cats.Unproductive) * 100) : 0
+                        }%)`
+                    }
+                }
+            },
+            cutout: '70%'
+        }
+    });
+
+    // ── Horizontal bar: Top Apps by Duration ─────────────────────────────────
+    const topApps = apps.slice(0, 8);
+    const ctxA = document.getElementById('appChart').getContext('2d');
+    if (appChart) appChart.destroy();
+    appChart = new Chart(ctxA, {
+        type: 'bar',
+        data: {
+            labels: topApps.map(a => a.app.replace(/\.exe$/i, '')),
+            datasets: [{
+                data:            topApps.map(a => a.time),
+                backgroundColor: topApps.map(a => barColor(a.category, 0.8)),
+                hoverBackgroundColor: topApps.map(a => barColor(a.category, 1)),
+                borderRadius: 4,
+                borderSkipped: false,
+            }]
+        },
+        options: {
+            indexAxis: 'y',
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        label: (ctx) => {
+                            const app = topApps[ctx.dataIndex];
+                            return ` ${formatDuration(ctx.raw)}  ·  ${app?.category || ''}`;
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    grid:  { color: '#f1f5f9' },
+                    ticks: { callback: (v) => formatDuration(v), font: { size: 10 }, maxTicksLimit: 6 }
                 },
-                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } }, cutout: '70%' }
-            });
-
-            const ctxApp = document.getElementById('appChart').getContext('2d');
-            if (appChart) appChart.destroy();
-            appChart = new Chart(ctxApp, {
-                type: 'bar',
-                data: {
-                    labels: apps.slice(0, 5).map(a => a.app),
-                    datasets: [{ data: apps.slice(0, 5).map(a => a.time), backgroundColor: '#6366f1', borderRadius: 8 }]
-                },
-                options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
-            });
-        }
-
-        function catColor(category) {
-            return category === 'Productive'   ? 'text-emerald-600 bg-emerald-50' :
-                   category === 'Unproductive' ? 'text-rose-600 bg-rose-50'       :
-                                                 'text-slate-500 bg-slate-100';
-        }
-
-        function toggleTabs(tabRowId) {
-            // All tab rows share the same data-tab-group — toggle them together
-            document.querySelectorAll(`[data-tab-group="${tabRowId}"]`).forEach(row => {
-                row.classList.toggle('hidden');
-            });
-            const chevron = document.getElementById('chevron-' + tabRowId);
-            if (chevron) {
-                const open = !document.querySelector(`[data-tab-group="${tabRowId}"]`).classList.contains('hidden');
-                chevron.style.transform = open ? 'rotate(90deg)' : 'rotate(0deg)';
+                y: {
+                    grid:  { display: false },
+                    ticks: { font: { size: 11 } }
+                }
             }
         }
+    });
+}
 
-        function updateTable(apps) {
-            const tbody = document.getElementById('appTableBody');
-            tbody.innerHTML = '';
+function toggleTabs(id) {
+    document.querySelectorAll(`[data-tab-group="${id}"]`).forEach(r => r.classList.toggle('hidden'));
+    const ch = document.getElementById('chevron-' + id);
+    if (ch) ch.style.transform = document.querySelector(`[data-tab-group="${id}"]`).classList.contains('hidden') ? '' : 'rotate(90deg)';
+}
 
-            apps.forEach((a, idx) => {
-                const hasTabs  = a.tabs && a.tabs.length > 0;
-                const tabRowId = `tabs-${idx}`;
-
-                // ── App row ──────────────────────────────────────────────────
-                const appRow = document.createElement('tr');
-                appRow.className = 'hover:bg-slate-50 transition-colors' + (hasTabs ? ' cursor-pointer select-none' : '');
-                if (hasTabs) appRow.onclick = () => toggleTabs(tabRowId);
-
-                // Chevron (expandable) or fixed-width spacer (non-expandable) —
-                // same rendered width so app names stay left-aligned in both cases.
-                const chevronHtml = hasTabs
-                    ? `<span id="chevron-${tabRowId}"
-                              class="inline-flex items-center justify-center w-4 h-4 mr-2 text-slate-400 transition-transform duration-200"
-                              style="font-size:9px">&#9654;</span>`
-                    : `<span class="inline-block w-4 h-4 mr-2"></span>`;
-
-                appRow.innerHTML = `
-                    <td class="px-6 py-3.5 font-medium text-slate-800 overflow-hidden">
-                        <div class="flex items-center min-w-0">
-                            ${chevronHtml}
-                            <span class="truncate">${a.app}</span>
+function updateTable(apps) {
+    const tbody = document.getElementById('appTableBody');
+    tbody.innerHTML = '';
+    apps.forEach((a, idx) => {
+        const hasTabs  = a.tabs && a.tabs.length > 0;
+        const tabRowId = `tabs-${idx}`;
+        const appRow   = document.createElement('tr');
+        appRow.className = 'hover:bg-slate-50 transition-colors' + (hasTabs ? ' cursor-pointer select-none' : '');
+        if (hasTabs) appRow.onclick = () => toggleTabs(tabRowId);
+        const chevron = hasTabs
+            ? `<span id="chevron-${tabRowId}" class="inline-flex items-center justify-center w-4 h-4 mr-2 text-slate-400 transition-transform" style="font-size:9px">&#9654;</span>`
+            : `<span class="inline-block w-4 h-4 mr-2"></span>`;
+        appRow.innerHTML = `
+            <td class="px-6 py-3.5 font-medium text-slate-800 overflow-hidden">
+                <div class="flex items-center min-w-0">${chevron}<span class="truncate">${a.app}</span></div>
+            </td>
+            <td class="px-6 py-3.5 text-center">
+                <span class="px-2 py-1 rounded-full text-xs font-bold ${catColor(a.category)}">${a.category}</span>
+            </td>
+            <td class="px-6 py-3.5 text-right text-slate-600 font-mono text-sm">${formatDuration(a.time)}</td>`;
+        tbody.appendChild(appRow);
+        if (hasTabs) {
+            a.tabs.forEach(tab => {
+                const tr = document.createElement('tr');
+                tr.setAttribute('data-tab-group', tabRowId);
+                tr.className = 'hidden bg-slate-50/60 hover:bg-slate-100/80 transition-colors';
+                tr.innerHTML = `
+                    <td class="px-6 py-2.5 overflow-hidden">
+                        <div class="flex items-center gap-2 min-w-0 pl-6">
+                            <span class="text-slate-300 shrink-0 text-xs">&#x2514;</span>
+                            <span class="truncate text-xs text-slate-500">${tab.title}</span>
                         </div>
                     </td>
-                    <td class="px-6 py-3.5 text-center">
-                        <span class="px-2 py-1 rounded-full text-xs font-bold ${catColor(a.category)}">${a.category}</span>
+                    <td class="px-6 py-2.5 text-center">
+                        <span class="px-2 py-0.5 rounded-full text-xs font-bold ${catColor(tab.category)}">${tab.category}</span>
                     </td>
-                    <td class="px-6 py-3.5 text-right text-slate-600 font-mono text-sm">${formatDuration(a.time)}</td>
-                `;
-                tbody.appendChild(appRow);
-
-                // ── Tab rows — flat <tr> in the SAME tbody (no nested table) ──
-                // Sharing the outer table's colgroup means all columns align exactly.
-                if (hasTabs) {
-                    a.tabs.forEach(tab => {
-                        const tabRow = document.createElement('tr');
-                        tabRow.setAttribute('data-tab-group', tabRowId);
-                        tabRow.className = 'hidden bg-slate-50/60 hover:bg-slate-100/80 transition-colors';
-                        tabRow.innerHTML = `
-                            <td class="px-6 py-2.5 overflow-hidden">
-                                <div class="flex items-center gap-2 min-w-0 pl-6">
-                                    <span class="text-slate-300 shrink-0 text-xs">└</span>
-                                    <span class="truncate text-xs text-slate-500">${tab.title}</span>
-                                </div>
-                            </td>
-                            <td class="px-6 py-2.5 text-center">
-                                <span class="px-2 py-0.5 rounded-full text-xs font-bold ${catColor(tab.category)}">${tab.category}</span>
-                            </td>
-                            <td class="px-6 py-2.5 text-right text-slate-400 font-mono text-xs">${formatDuration(tab.time)}</td>
-                        `;
-                        tbody.appendChild(tabRow);
-                    });
-                }
+                    <td class="px-6 py-2.5 text-right text-slate-400 font-mono text-xs">${formatDuration(tab.time)}</td>`;
+                tbody.appendChild(tr);
             });
         }
+    });
+}
 
-        function copyInstallCmd() {
-            const cmd = document.getElementById('installCmd').textContent;
-            navigator.clipboard.writeText(cmd).then(() => {
-                const btn = document.getElementById('copyBtn');
-                btn.innerHTML = '<i data-lucide="check" class="w-4 h-4 text-emerald-400"></i>';
-                lucide.createIcons();
-                setTimeout(() => {
-                    btn.innerHTML = '<i data-lucide="copy" class="w-4 h-4"></i>';
-                    lucide.createIcons();
-                }, 2000);
-            }).catch(() => {
-                // Fallback for browsers that block clipboard without HTTPS
-                const el = document.getElementById('installCmd');
-                el.select && el.select();
-                document.execCommand('copy');
-            });
+// ── Group detail ──────────────────────────────────────────────────────────────────
+async function loadGroupData() {
+    if (!_currentGroupId) return;
+    const date    = document.getElementById('groupDatePicker').value;
+    const loading = document.getElementById('groupLoading');
+    const tbody   = document.getElementById('groupTableBody');
+    const empty   = document.getElementById('groupEmpty');
+
+    loading.classList.remove('hidden');
+    tbody.innerHTML = '';
+    empty.classList.add('hidden');
+
+    const isAdmin = currentUser?.role === 'admin';
+
+    try {
+        const res  = await apiFetch(`${API_BASE}/groups/${_currentGroupId}/summary?date=${date}`);
+        if (!res.ok) throw new Error('Failed to load group');
+        const data = await res.json();
+
+        // Update group name in header
+        document.getElementById('groupName').textContent = data.group.name;
+
+        // Show/hide admin controls
+        document.getElementById('addMemberBtn').style.display    = isAdmin ? '' : 'none';
+        document.getElementById('deleteGroupBtn').style.display  = isAdmin ? '' : 'none';
+
+        const members = data.members || [];
+        if (!members.length) { empty.classList.remove('hidden'); loading.classList.add('hidden'); return; }
+
+        // Compute stats
+        const scored      = members.filter(m => m.summary);
+        const activeCount = members.filter(m => computeStatus(m.timeline).status === 'available').length;
+        const avgScore    = scored.length ? Math.round(scored.reduce((s,m) => s + m.summary.productivity_score, 0) / scored.length) : 0;
+
+        document.getElementById('groupStatMembers').textContent = members.length;
+        document.getElementById('groupStatActive').textContent  = activeCount;
+        document.getElementById('groupStatScore').textContent   = scored.length ? `${avgScore}%` : '—';
+
+        // Sort: available → away → offline, then by score desc
+        const order = { available: 0, away: 1, offline: 2 };
+        const rows  = members.map(m => ({
+            ...m,
+            status: computeStatus(m.timeline).status
+        })).sort((a, b) => {
+            const so = order[a.status] - order[b.status];
+            if (so !== 0) return so;
+            return (b.summary?.productivity_score ?? -1) - (a.summary?.productivity_score ?? -1);
+        });
+
+        rows.forEach(r => {
+            const score      = r.summary?.productivity_score ?? null;
+            const activeTime = r.summary?.total_active_time  ?? null;
+            const tr = document.createElement('tr');
+            tr.className = 'hover:bg-slate-50 transition-colors';
+            tr.innerHTML = `
+                <td class="px-6 py-4 cursor-pointer" onclick="selectUser('${r.username}')">
+                    <div class="flex items-center gap-3">
+                        <div class="w-8 h-8 rounded-full bg-purple-100 flex items-center justify-center text-purple-600 font-bold text-sm shrink-0">${r.username[0].toUpperCase()}</div>
+                        <span class="font-medium text-slate-800 hover:text-indigo-600">${r.username}</span>
+                    </div>
+                </td>
+                <td class="px-6 py-4 text-center">
+                    ${score !== null ? `
+                        <div class="flex items-center justify-center gap-2">
+                            <div class="w-20 bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                                <div class="h-full rounded-full ${score >= 60 ? 'bg-emerald-500' : 'bg-rose-400'}" style="width:${score}%"></div>
+                            </div>
+                            <span class="font-semibold text-slate-700 text-sm tabular-nums">${score}%</span>
+                        </div>` : '<span class="text-slate-300 text-sm">No data</span>'}
+                </td>
+                <td class="px-6 py-4 text-center text-sm text-slate-500">${activeTime !== null ? formatDuration(activeTime) : '—'}</td>
+                <td class="px-6 py-4 text-center">${statusBadge(r.status)}</td>
+                <td class="px-6 py-4 text-right">
+                    ${isAdmin ? `
+                    <button onclick="removeMemberFromGroup('${r.username}')"
+                            class="text-xs text-rose-500 hover:text-rose-700 font-semibold px-2 py-1 rounded-lg hover:bg-rose-50 transition-all">Remove</button>
+                    ` : ''}
+                </td>`;
+            tbody.appendChild(tr);
+        });
+    } catch (e) { if (e.message !== 'Session expired') console.error(e); }
+    loading.classList.add('hidden');
+}
+
+async function removeMemberFromGroup(username) {
+    if (!_currentGroupId || !confirm(`Remove ${username} from this group?`)) return;
+    try {
+        const res = await apiFetch(`${API_BASE}/groups/${_currentGroupId}/members/${username}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error('Failed');
+        await Promise.all([fetchGroups(), loadGroupData()]);
+    } catch(e) { alert('Failed to remove member: ' + e.message); }
+}
+
+// ── Copy install command ──────────────────────────────────────────────────────────
+function copyInstallCmd() {
+    navigator.clipboard.writeText(document.getElementById('installCmd').textContent).then(() => {
+        const btn = document.getElementById('copyBtn');
+        btn.innerHTML = '<i data-lucide="check" class="w-4 h-4 text-emerald-400"></i>';
+        lucide.createIcons();
+        setTimeout(() => { btn.innerHTML = '<i data-lucide="copy" class="w-4 h-4"></i>'; lucide.createIcons(); }, 2000);
+    });
+}
+
+// ── Auth user management ──────────────────────────────────────────────────────────
+async function loadAuthUsers() {
+    try {
+        const res   = await apiFetch(`${SERVER_BASE}/auth/users`);
+        const users = await res.json();
+        const tbody = document.getElementById('authUserTableBody');
+        const empty = document.getElementById('authUserEmpty');
+        tbody.innerHTML = '';
+        if (!users.length) { empty.classList.remove('hidden'); return; }
+        empty.classList.add('hidden');
+        users.forEach(u => {
+            const isMe = u.username === currentUser.username;
+            const tr   = document.createElement('tr');
+            tr.className = 'hover:bg-slate-50 transition-colors';
+            tr.innerHTML = `
+                <td class="px-6 py-4 font-medium text-slate-800">
+                    ${u.username}
+                    ${isMe ? '<span class="ml-2 text-xs bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-full font-semibold">you</span>' : ''}
+                </td>
+                <td class="px-6 py-4">
+                    <span class="px-2.5 py-1 rounded-full text-xs font-bold ${u.role === 'admin' ? 'bg-indigo-50 text-indigo-600' : 'bg-slate-100 text-slate-500'}">${u.role}</span>
+                </td>
+                <td class="px-6 py-4 text-slate-400 text-xs">${u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'}</td>
+                <td class="px-6 py-4 text-right">
+                    <div class="flex items-center justify-end gap-2">
+                        <button onclick="openChangePwModal('${u.username}')" class="px-3 py-1.5 text-xs font-semibold border border-slate-200 rounded-lg hover:bg-slate-50 text-slate-600 transition-all">Change password</button>
+                        ${!isMe ? `<button onclick="openDeleteModal('${u.username}')" class="px-3 py-1.5 text-xs font-semibold border border-rose-200 rounded-lg hover:bg-rose-50 text-rose-500 transition-all">Delete</button>` : ''}
+                    </div>
+                </td>`;
+            tbody.appendChild(tr);
+        });
+    } catch (e) { if (e.message !== 'Session expired') console.error(e); }
+}
+
+// Add Dashboard User
+function openAddUserModal() {
+    ['newUsername','newPassword'].forEach(id => document.getElementById(id).value = '');
+    document.getElementById('newRole').value = 'viewer';
+    document.getElementById('addUserError').classList.add('hidden');
+    document.getElementById('addUserModal').classList.remove('hidden');
+    setTimeout(() => document.getElementById('newUsername').focus(), 50);
+}
+function closeAddUserModal() { document.getElementById('addUserModal').classList.add('hidden'); }
+async function submitAddUser(e) {
+    e.preventDefault();
+    const err = document.getElementById('addUserError');
+    err.classList.add('hidden');
+    try {
+        const res = await apiFetch(`${SERVER_BASE}/auth/users`, {
+            method: 'POST',
+            body: JSON.stringify({ username: document.getElementById('newUsername').value.trim(), password: document.getElementById('newPassword').value, role: document.getElementById('newRole').value }),
+        });
+        if (!res.ok) { const d = await res.json().catch(()=>({})); throw new Error(d.detail || 'Failed to create user'); }
+        closeAddUserModal(); await loadAuthUsers();
+    } catch (ex) { err.textContent = ex.message; err.classList.remove('hidden'); }
+}
+
+// Change Password
+let changePwTarget = '';
+function openChangePwModal(u) {
+    changePwTarget = u;
+    document.getElementById('changePwUsername').textContent = u;
+    document.getElementById('changePwValue').value = '';
+    document.getElementById('changePwError').classList.add('hidden');
+    document.getElementById('changePwModal').classList.remove('hidden');
+    setTimeout(() => document.getElementById('changePwValue').focus(), 50);
+}
+function closeChangePwModal() { document.getElementById('changePwModal').classList.add('hidden'); }
+async function submitChangePassword(e) {
+    e.preventDefault();
+    const err = document.getElementById('changePwError');
+    err.classList.add('hidden');
+    try {
+        const res = await apiFetch(`${SERVER_BASE}/auth/users/${changePwTarget}/password`, { method: 'PUT', body: JSON.stringify({ password: document.getElementById('changePwValue').value }) });
+        if (!res.ok) { const d = await res.json().catch(()=>({})); throw new Error(d.detail || 'Failed'); }
+        closeChangePwModal();
+    } catch (ex) { err.textContent = ex.message; err.classList.remove('hidden'); }
+}
+
+// Delete Dashboard User
+let deleteTarget = '';
+function openDeleteModal(u) {
+    deleteTarget = u;
+    document.getElementById('deleteUsername').textContent = u;
+    document.getElementById('deleteError').classList.add('hidden');
+    document.getElementById('deleteModal').classList.remove('hidden');
+}
+function closeDeleteModal() { document.getElementById('deleteModal').classList.add('hidden'); }
+async function confirmDelete() {
+    const err = document.getElementById('deleteError');
+    err.classList.add('hidden');
+    try {
+        const res = await apiFetch(`${SERVER_BASE}/auth/users/${deleteTarget}`, { method: 'DELETE' });
+        if (!res.ok) { const d = await res.json().catch(()=>({})); throw new Error(d.detail || 'Failed'); }
+        closeDeleteModal(); await loadAuthUsers();
+    } catch (ex) { err.textContent = ex.message; err.classList.remove('hidden'); }
+}
+
+// Create Group
+function openCreateGroupModal() {
+    document.getElementById('newGroupName').value = '';
+    document.getElementById('createGroupError').classList.add('hidden');
+    document.getElementById('createGroupModal').classList.remove('hidden');
+    setTimeout(() => document.getElementById('newGroupName').focus(), 50);
+}
+function closeCreateGroupModal() { document.getElementById('createGroupModal').classList.add('hidden'); }
+async function submitCreateGroup(e) {
+    e.preventDefault();
+    const err  = document.getElementById('createGroupError');
+    const name = document.getElementById('newGroupName').value.trim();
+    err.classList.add('hidden');
+    try {
+        const res = await apiFetch(`${API_BASE}/groups`, { method: 'POST', body: JSON.stringify({ name }) });
+        if (!res.ok) { const d = await res.json().catch(()=>({})); throw new Error(d.detail || 'Failed'); }
+        const group = await res.json();
+        closeCreateGroupModal();
+        await fetchGroups();
+        selectGroup(group.id);
+    } catch (ex) { err.textContent = ex.message; err.classList.remove('hidden'); }
+}
+
+// Add Member
+function openAddMemberModal() {
+    if (!_currentGroupId) return;
+    const g = _allGroups.find(x => x.id === _currentGroupId);
+    document.getElementById('addMemberGroupName').textContent = g ? g.name : _currentGroupId;
+    document.getElementById('addMemberError').classList.add('hidden');
+
+    // Populate select with employees not already in the group
+    const existing = g ? g.members : [];
+    const available = _allEmployees.filter(u => !existing.includes(u));
+    const sel = document.getElementById('addMemberSelect');
+    sel.innerHTML = '';
+    if (!available.length) {
+        sel.innerHTML = '<option disabled>All employees already in group</option>';
+    } else {
+        available.forEach(u => {
+            const opt = document.createElement('option');
+            opt.value = u; opt.textContent = u;
+            sel.appendChild(opt);
+        });
+    }
+    document.getElementById('addMemberModal').classList.remove('hidden');
+}
+function closeAddMemberModal() { document.getElementById('addMemberModal').classList.add('hidden'); }
+async function submitAddMember(e) {
+    e.preventDefault();
+    const err      = document.getElementById('addMemberError');
+    const username = document.getElementById('addMemberSelect').value;
+    err.classList.add('hidden');
+    if (!username) return;
+    try {
+        const res = await apiFetch(`${API_BASE}/groups/${_currentGroupId}/members`, { method: 'POST', body: JSON.stringify({ username }) });
+        if (!res.ok) { const d = await res.json().catch(()=>({})); throw new Error(d.detail || 'Failed'); }
+        closeAddMemberModal();
+        await Promise.all([fetchGroups(), loadGroupData()]);
+    } catch (ex) { err.textContent = ex.message; err.classList.remove('hidden'); }
+}
+
+// Delete Group
+function confirmDeleteGroup() {
+    if (!_currentGroupId) return;
+    const g = _allGroups.find(x => x.id === _currentGroupId);
+    document.getElementById('deleteGroupName').textContent = g ? g.name : _currentGroupId;
+    document.getElementById('deleteGroupError').classList.add('hidden');
+    document.getElementById('deleteGroupModal').classList.remove('hidden');
+}
+function closeDeleteGroupModal() { document.getElementById('deleteGroupModal').classList.add('hidden'); }
+async function submitDeleteGroup() {
+    const err = document.getElementById('deleteGroupError');
+    err.classList.add('hidden');
+    try {
+        const res = await apiFetch(`${API_BASE}/groups/${_currentGroupId}`, { method: 'DELETE' });
+        if (!res.ok) { const d = await res.json().catch(()=>({})); throw new Error(d.detail || 'Failed'); }
+        closeDeleteGroupModal();
+        _currentGroupId = null;
+        await fetchGroups();
+        showView('home');
+    } catch (ex) { err.textContent = ex.message; err.classList.remove('hidden'); }
+}
+
+// ── Rename Employee ───────────────────────────────────────────────────────────────
+let renameTarget = '';
+
+function openRenameModal(username) {
+    if (!username) return;
+    renameTarget = username;
+    document.getElementById('renameOldName').textContent = username;
+    document.getElementById('renameNewName').value = username;
+    document.getElementById('renameError').classList.add('hidden');
+    document.getElementById('renameSaveBtn').disabled = false;
+    document.getElementById('renameSaveBtn').textContent = 'Rename';
+    document.getElementById('renameModal').classList.remove('hidden');
+    const inp = document.getElementById('renameNewName');
+    setTimeout(() => { inp.focus(); inp.select(); }, 50);
+}
+function closeRenameModal() { document.getElementById('renameModal').classList.add('hidden'); }
+
+async function submitRename(e) {
+    e.preventDefault();
+    const err    = document.getElementById('renameError');
+    const btn    = document.getElementById('renameSaveBtn');
+    const newName = document.getElementById('renameNewName').value.trim().toLowerCase();
+    err.classList.add('hidden');
+    if (!newName) return;
+    if (newName === renameTarget.toLowerCase()) { closeRenameModal(); return; }
+
+    btn.disabled = true; btn.textContent = 'Renaming...';
+    try {
+        const res = await apiFetch(`${API_BASE}/user/rename`, {
+            method: 'PUT',
+            body: JSON.stringify({ old_name: renameTarget, new_name: newName }),
+        });
+        if (!res.ok) { const d = await res.json().catch(()=>({})); throw new Error(d.detail || 'Rename failed'); }
+        const data = await res.json();
+        closeRenameModal();
+
+        // If we were viewing this user's detail, update the current user reference
+        if (_currentUserId === renameTarget) {
+            _currentUserId = newName;
+            document.getElementById('userName').textContent = newName;
         }
+        renameTarget = '';
+        // Refresh sidebar and overview
+        await fetchSidebarUsers();
+        if (_activeView === 'home') loadOverview();
+        alert(`Renamed successfully. ${data.migrated} events migrated.`);
+    } catch (ex) {
+        err.textContent = ex.message;
+        err.classList.remove('hidden');
+    } finally {
+        btn.disabled = false; btn.textContent = 'Rename';
+    }
+}
 
-        window.onload = async () => {
-            // Wire all download / install links
-            const dlUrl     = SERVER_BASE + '/download-agent';
-            const scriptUrl = SERVER_BASE + '/install-script';
-            const oneliner  = `powershell -ExecutionPolicy Bypass -Command "irm '${SERVER_BASE}/install-script' | iex"`;
+// Close modals on backdrop click
+['addUserModal','changePwModal','deleteModal','renameModal','createGroupModal','addMemberModal','deleteGroupModal'].forEach(id => {
+    document.getElementById(id).addEventListener('click', e => {
+        if (e.target === e.currentTarget) e.currentTarget.classList.add('hidden');
+    });
+});
 
-            document.getElementById('downloadAgentBtn').href          = dlUrl;
-            document.getElementById('downloadAgentBtnWelcome').href   = dlUrl;
-            document.getElementById('downloadScriptBtn').href         = scriptUrl;
-            document.getElementById('downloadScriptBtnSidebar').href  = scriptUrl;
-            document.getElementById('installCmd').textContent         = oneliner;
-
-            lucide.createIcons();
-
-            // Version badge — shows server version and uptime to confirm deploys
-            try {
-                const h = await fetch(`${API_BASE}/health`);
-                const d = await h.json();
-                const started = new Date(d.started_at);
-                const mins = Math.round((Date.now() - started) / 60000);
-                const uptime = mins < 60 ? `${mins}m ago` : `${Math.round(mins/60)}h ago`;
-                document.getElementById('serverDot').className = 'w-2 h-2 rounded-full bg-green-400';
-                document.getElementById('serverVersion').textContent = `v${d.version} · up ${uptime}`;
-            } catch {
-                document.getElementById('serverDot').className = 'w-2 h-2 rounded-full bg-red-400';
-                document.getElementById('serverVersion').textContent = 'server unreachable';
-            }
-
-            // Use local date, not UTC — agent stores timestamps in local time
-            const now = new Date();
-            const localDate = now.getFullYear() + '-' +
-                String(now.getMonth() + 1).padStart(2, '0') + '-' +
-                String(now.getDate()).padStart(2, '0');
-            document.getElementById('datePicker').value = localDate;
-            await fetchUsers();
-            setInterval(async () => { if (currentUserId) await loadUserData(); }, 30000);
-        };
-        document.getElementById('datePicker').onchange = loadUserData;
-    </script>
+// ── Bootstrap ─────────────────────────────────────────────────────────────────────
+window.onload = async () => {
+    if (authToken) { await initApp(); }
+    else { showLoginPage(); lucide.createIcons(); }
+    document.getElementById('datePicker').onchange         = loadUserData;
+    document.getElementById('overviewDatePicker').onchange = loadOverview;
+    document.getElementById('groupDatePicker').onchange    = loadGroupData;
+};
+</script>
 </body>
 </html>

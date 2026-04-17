@@ -3,14 +3,26 @@ main.py — FastAPI analytics server.
 
 Responsibilities
 ----------------
-POST /ingest          receive raw batches from agents, write to RawTelemetry as-is
-GET  /api/users       list known users from UserIndex
+POST /ingest            receive raw batches from agents → RawTelemetry
+GET  /api/users         list known tracked users from UserIndex
 GET  /api/user-summary  aggregate KPIs on demand from raw rows
 GET  /api/user-apps     per-app usage totals
 GET  /api/user-timeline merged time-series for charts
 
-All aggregation is done at READ time inside aggregator.py.
-No enrichment or aggregation happens at write time.
+POST /auth/login        issue JWT for dashboard login
+GET  /auth/me           return current user info
+GET  /auth/users        list dashboard accounts (admin)
+POST /auth/users        create dashboard account (admin)
+PUT  /auth/users/{u}/password  change password (admin)
+DELETE /auth/users/{u}  delete dashboard account (admin)
+
+Authentication
+--------------
+/ingest          → X-API-Key: <AGENT_API_KEY>
+all /api/* and /auth/users*
+                 → JWT Bearer  OR  X-API-Key: <ADMIN_API_KEY>
+/api/health, /install-script, /agent-config, /download-agent
+                 → public (no auth required)
 
 Run
 ---
@@ -23,19 +35,25 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
 from pydantic import BaseModel
 
 from .storage   import TelemetryStorage
 from .aggregator import aggregate_summary, aggregate_apps, build_timeline
+from .auth      import (
+    verify_agent_key,
+    get_current_user,
+    require_admin,
+    create_token,
+    AGENT_KEY,
+)
+from .users     import UserStorage
+from .groups    import GroupStorage
 
 # ── Version ──────────────────────────────────────────────────────────────────────
-# Bump APP_VERSION before every deploy — the dashboard reads this from /api/health
-# so you can instantly confirm the new build is live.
-
-APP_VERSION = "2.2"
+APP_VERSION = "2.6"
 STARTED_AT  = datetime.now(timezone.utc).isoformat()
 
 # ── App setup ───────────────────────────────────────────────────────────────────
@@ -49,25 +67,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-storage = TelemetryStorage()
+storage       = TelemetryStorage()
+user_storage  = UserStorage(storage.service)   # shares the same TableServiceClient
+group_storage = GroupStorage(storage.service)  # shares the same TableServiceClient
 
 
 # ── URL helper ──────────────────────────────────────────────────────────────────
 
 def _public_base(request: Request) -> str:
-    """
-    Return the public-facing base URL (scheme + host, no trailing slash).
-
-    Azure App Service terminates TLS at the load balancer and forwards plain
-    HTTP to the container, so request.base_url always reports http://.
-    The X-Forwarded-Proto header carries the real client-facing scheme (https).
-    """
     proto = request.headers.get("x-forwarded-proto", request.url.scheme)
     host  = request.headers.get("host", request.url.netloc)
     return f"{proto}://{host}"
 
 
-# ── Ingest (write path) ─────────────────────────────────────────────────────────
+# ── Ingest (write path — agent key) ────────────────────────────────────────────
 
 class IngestPayload(BaseModel):
     user:   str
@@ -76,60 +89,53 @@ class IngestPayload(BaseModel):
 
 
 @app.post("/ingest", status_code=202)
-async def ingest(payload: IngestPayload):
-    """
-    Receive a batch of raw telemetry events from the agent.
-    Writes each event as one row in RawTelemetry — no enrichment, no aggregation.
-    Idempotent: retried batches produce the same rows (upsert).
-    """
+async def ingest(payload: IngestPayload, _: None = Depends(verify_agent_key)):
     if not payload.events:
         raise HTTPException(status_code=400, detail="Empty event batch")
-
     written = storage.write_raw_batch(payload.user, payload.device, payload.events)
     return {"accepted": written, "total": len(payload.events)}
 
 
-# ── Dashboard (read path) ───────────────────────────────────────────────────────
+# ── Public endpoints (no auth) ──────────────────────────────────────────────────
 
 @app.get("/api/health")
 async def health():
-    """Liveness check used by the agent on startup and during --install."""
-    return {"status": "ok", "service": "telemetry-analytics", "version": APP_VERSION, "started_at": STARTED_AT}
+    return {
+        "status":     "ok",
+        "service":    "telemetry-analytics",
+        "version":    APP_VERSION,
+        "started_at": STARTED_AT,
+    }
 
 
 @app.get("/agent-config")
 async def agent_config(request: Request):
     """
-    Return the canonical server URL so the agent can self-configure.
-    The agent calls this during --install to write its config.json.
+    Public — called by the agent during --install to self-configure.
+    Returns the canonical server URL and the agent API key so the agent
+    can write both into its config.json automatically.
+    The agent key grants write-only access to /ingest; leaking it lets
+    someone send fake data, not read real data.
     """
     base = _public_base(request)
-    return {"server_url": base, "ingest_url": f"{base}/ingest"}
+    return {
+        "server_url":    base,
+        "ingest_url":    f"{base}/ingest",
+        "agent_api_key": AGENT_KEY,
+    }
 
 
 @app.get("/download-agent")
 async def download_agent():
-    """
-    Serve the pre-built agent EXE.
-
-    Production (Render / Linux): set the AGENT_DOWNLOAD_URL env var to wherever
-    the EXE is hosted (Azure Blob, GitHub Releases, etc.) — the server will
-    redirect the browser there.
-
-    Local dev: falls back to dist/telemetry_agent.exe built by PyInstaller.
-    """
+    """Public — referenced by the PowerShell install script."""
     redirect_url = os.getenv("AGENT_DOWNLOAD_URL")
     if redirect_url:
         return RedirectResponse(url=redirect_url)
-
     exe = Path("dist/telemetry_agent.exe")
     if not exe.exists():
         raise HTTPException(
             status_code=404,
-            detail=(
-                "Set AGENT_DOWNLOAD_URL env var to point to the hosted EXE, "
-                "or build locally with: pyinstaller telemetry_agent.spec"
-            ),
+            detail="Set AGENT_DOWNLOAD_URL env var to point to the hosted EXE.",
         )
     return FileResponse(
         str(exe),
@@ -141,22 +147,10 @@ async def download_agent():
 @app.get("/install-script")
 async def install_script(request: Request):
     """
-    Returns a PowerShell installer script with THIS server's URL already embedded.
-
-    The script:
-      1. Self-elevates to Administrator via UAC if needed
-      2. Downloads telemetry_agent.exe from this server
-      3. Runs  telemetry_agent.exe --install --server-url <this-server>
-      4. Agent writes config, registers the scheduled task, starts at next logon
-
-    Dashboard shows the one-liner:
-      powershell -ExecutionPolicy Bypass -Command "irm <server>/install-script | iex"
+    Public PowerShell installer.  The agent fetches /agent-config during
+    --install and writes the key into its own config — no key needed here.
     """
     base = _public_base(request)
-
-    # IMPORTANT: keep this script ASCII-only and all PowerShell expressions on
-    # single lines. Unicode characters (em-dashes, box-drawing) and multi-line
-    # expressions break PowerShell's parser when the script is piped through iex.
     script = f"""\
 # ============================================================
 #  Telemetry Agent - one-click installer
@@ -204,14 +198,103 @@ Read-Host "Press Enter to close"
 
 _INDEX = Path(__file__).parent.parent / "index.html"
 
+
 @app.get("/")
 async def index():
     return FileResponse(str(_INDEX))
 
 
+# ── Auth routes ─────────────────────────────────────────────────────────────────
+
+class LoginPayload(BaseModel):
+    username: str
+    password: str
+
+
+class CreateUserPayload(BaseModel):
+    username: str
+    password: str
+    role:     str = "viewer"
+
+
+class ChangePasswordPayload(BaseModel):
+    password: str
+
+
+class ChangeRolePayload(BaseModel):
+    role: str
+
+
+@app.post("/auth/login")
+async def login(payload: LoginPayload):
+    """Public — issue a JWT on valid credentials."""
+    user = user_storage.verify_password(payload.username, payload.password)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    token = create_token(user["username"], user["role"])
+    return {"token": token, "username": user["username"], "role": user["role"]}
+
+
+@app.get("/auth/me")
+async def me(user: dict = Depends(get_current_user)):
+    return user
+
+
+@app.get("/auth/users")
+async def list_auth_users(_: dict = Depends(require_admin)):
+    return user_storage.list_users()
+
+
+@app.post("/auth/users", status_code=201)
+async def create_auth_user(payload: CreateUserPayload, _: dict = Depends(require_admin)):
+    if payload.role not in ("admin", "viewer"):
+        raise HTTPException(status_code=400, detail="role must be 'admin' or 'viewer'")
+    if len(payload.password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    return user_storage.create_user(payload.username, payload.password, payload.role)
+
+
+@app.put("/auth/users/{username}/password")
+async def change_password(
+    username: str,
+    payload:  ChangePasswordPayload,
+    _:        dict = Depends(require_admin),
+):
+    if len(payload.password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    if not user_storage.update_password(username, payload.password):
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"ok": True}
+
+
+@app.put("/auth/users/{username}/role")
+async def change_role(
+    username: str,
+    payload:  ChangeRolePayload,
+    actor:    dict = Depends(require_admin),
+):
+    if payload.role not in ("admin", "viewer"):
+        raise HTTPException(status_code=400, detail="role must be 'admin' or 'viewer'")
+    if username == actor["username"]:
+        raise HTTPException(status_code=400, detail="Cannot change your own role")
+    if not user_storage.update_role(username, payload.role):
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"ok": True}
+
+
+@app.delete("/auth/users/{username}")
+async def delete_auth_user(username: str, actor: dict = Depends(require_admin)):
+    if username == actor["username"]:
+        raise HTTPException(status_code=400, detail="Cannot delete your own account")
+    if not user_storage.delete_user(username):
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"ok": True}
+
+
+# ── Analytics (read path — JWT or admin X-API-Key) ──────────────────────────────
+
 @app.get("/api/users")
-async def get_users():
-    """List all known users. O(users) via UserIndex, not O(events)."""
+async def get_users(_: dict = Depends(get_current_user)):
     try:
         return [{"user": u} for u in storage.get_all_users()]
     except Exception as e:
@@ -219,11 +302,7 @@ async def get_users():
 
 
 @app.get("/api/user-summary")
-async def get_user_summary(user: str, date: str):
-    """
-    Fetch raw rows for user+date then aggregate on demand.
-    Returns: total_active_time, total_idle_time, productivity_score, top_app.
-    """
+async def get_user_summary(user: str, date: str, _: dict = Depends(get_current_user)):
     try:
         events = storage.get_raw_events(user, date)
         if not events:
@@ -236,8 +315,7 @@ async def get_user_summary(user: str, date: str):
 
 
 @app.get("/api/user-apps")
-async def get_user_apps(user: str, date: str):
-    """Per-app active-time totals with productivity category, sorted by time."""
+async def get_user_apps(user: str, date: str, _: dict = Depends(get_current_user)):
     try:
         events = storage.get_raw_events(user, date)
         return aggregate_apps(events)
@@ -246,8 +324,7 @@ async def get_user_apps(user: str, date: str):
 
 
 @app.get("/api/user-timeline")
-async def get_user_timeline(user: str, date: str):
-    """Merged time-series of app events for charting."""
+async def get_user_timeline(user: str, date: str, _: dict = Depends(get_current_user)):
     try:
         events = storage.get_raw_events(user, date)
         return build_timeline(events)
@@ -257,12 +334,31 @@ async def get_user_timeline(user: str, date: str):
 
 # ── Admin: data deletion ────────────────────────────────────────────────────────
 
+class RenameUserPayload(BaseModel):
+    old_name: str
+    new_name: str
+
+
+@app.put("/api/user/rename")
+async def rename_user(payload: RenameUserPayload, _: dict = Depends(require_admin)):
+    """Rename a tracked employee — migrates all telemetry to the new username."""
+    old = payload.old_name.strip()
+    new = payload.new_name.strip()
+    if not old or not new:
+        raise HTTPException(status_code=400, detail="old_name and new_name are required")
+    if old.lower() == new.lower():
+        raise HTTPException(status_code=400, detail="New name is the same as the current name")
+    try:
+        result = storage.rename_user(old, new)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.delete("/api/user")
-async def delete_user(user: str):
-    """
-    Delete ALL data for a user — every event row in RawTelemetry and
-    the UserIndex entry.  The user disappears from the dashboard immediately.
-    """
+async def delete_user(user: str, _: dict = Depends(require_admin)):
     try:
         deleted = storage.delete_user(user)
         return {"user": user, "deleted_events": deleted}
@@ -271,11 +367,7 @@ async def delete_user(user: str):
 
 
 @app.delete("/api/user-date")
-async def delete_user_date(user: str, date: str):
-    """
-    Delete all events for a user on a specific date (YYYY-MM-DD).
-    Useful for wiping test/bad data while keeping other days intact.
-    """
+async def delete_user_date(user: str, date: str, _: dict = Depends(require_admin)):
     try:
         deleted = storage.delete_user_date(user, date)
         return {"user": user, "date": date, "deleted_events": deleted}
@@ -283,17 +375,80 @@ async def delete_user_date(user: str, date: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ── Future: Daily summary Azure Function (placeholder) ─────────────────────────
-#
-# Deploy a Timer-triggered Azure Function (cron: "0 0 0 * * *") that:
-#   1. Iterates users from UserIndex
-#   2. Calls storage.get_raw_events(user, yesterday) for each
-#   3. Calls aggregate_summary() + aggregate_apps() from aggregator.py
-#   4. Writes results to UserDailySummary + UserAppSummary tables
-#   5. Optionally archives/deletes raw rows older than retention window
-#
-# This eliminates per-request aggregation for historical dates while
-# the FastAPI server continues to aggregate today's live data on demand.
+# ── Groups ──────────────────────────────────────────────────────────────────────
+
+class CreateGroupPayload(BaseModel):
+    name: str
+
+class AddMemberPayload(BaseModel):
+    username: str
+
+
+@app.get("/api/groups")
+async def list_groups(_: dict = Depends(get_current_user)):
+    return group_storage.list_groups()
+
+
+@app.post("/api/groups", status_code=201)
+async def create_group(payload: CreateGroupPayload, actor: dict = Depends(require_admin)):
+    if not payload.name.strip():
+        raise HTTPException(status_code=400, detail="Group name is required")
+    return group_storage.create_group(payload.name, actor["username"])
+
+
+@app.delete("/api/groups/{group_id}")
+async def delete_group(group_id: str, _: dict = Depends(require_admin)):
+    if not group_storage.delete_group(group_id):
+        raise HTTPException(status_code=404, detail="Group not found")
+    return {"ok": True}
+
+
+@app.post("/api/groups/{group_id}/members")
+async def add_group_member(
+    group_id: str,
+    payload:  AddMemberPayload,
+    _:        dict = Depends(require_admin),
+):
+    result = group_storage.add_member(group_id, payload.username)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Group not found")
+    return result
+
+
+@app.delete("/api/groups/{group_id}/members/{username}")
+async def remove_group_member(
+    group_id: str,
+    username: str,
+    _:        dict = Depends(require_admin),
+):
+    result = group_storage.remove_member(group_id, username)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Group not found")
+    return result
+
+
+@app.get("/api/groups/{group_id}/summary")
+async def get_group_summary(
+    group_id: str,
+    date:     str,
+    _:        dict = Depends(get_current_user),
+):
+    group = group_storage.get_group(group_id)
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    members_data = []
+    for username in group["members"]:
+        events   = storage.get_raw_events(username, date)
+        summary  = aggregate_summary(events) if events else None
+        timeline = build_timeline(events)    if events else []
+        members_data.append({
+            "username": username,
+            "summary":  summary,
+            "timeline": timeline,
+        })
+
+    return {"group": group, "date": date, "members": members_data}
 
 
 if __name__ == "__main__":
