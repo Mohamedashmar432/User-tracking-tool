@@ -296,7 +296,7 @@ async def delete_auth_user(username: str, actor: dict = Depends(require_admin)):
 @app.get("/api/users")
 async def get_users(_: dict = Depends(get_current_user)):
     try:
-        return [{"user": u} for u in storage.get_all_users()]
+        return storage.get_users_with_aliases()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -338,21 +338,47 @@ class RenameUserPayload(BaseModel):
     old_name: str
     new_name: str
 
+class MergeUsersPayload(BaseModel):
+    source: str   # user whose data gets moved (will be deleted)
+    target: str   # user who receives all the data
+
 
 @app.put("/api/user/rename")
 async def rename_user(payload: RenameUserPayload, _: dict = Depends(require_admin)):
-    """Rename a tracked employee — migrates all telemetry to the new username."""
-    old = payload.old_name.strip()
-    new = payload.new_name.strip()
-    if not old or not new:
+    """
+    Set a display alias for a tracked employee.
+    Only updates the dashboard label — RawTelemetry stays under the original
+    username so the agent can keep sending data without creating duplicates.
+    """
+    username  = payload.old_name.strip()
+    new_alias = payload.new_name.strip()
+    if not username or not new_alias:
         raise HTTPException(status_code=400, detail="old_name and new_name are required")
-    if old.lower() == new.lower():
-        raise HTTPException(status_code=400, detail="New name is the same as the current name")
     try:
-        result = storage.rename_user(old, new)
-        return result
+        ok = storage.set_alias(username, new_alias)
+        if not ok:
+            raise HTTPException(status_code=404, detail=f"Employee '{username}' not found")
+        return {"user": username, "alias": new_alias}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/user/merge")
+async def merge_users(payload: MergeUsersPayload, _: dict = Depends(require_admin)):
+    """
+    Merge all telemetry from `source` into `target`, then delete `source`.
+    Use when a re-installed agent created a duplicate employee profile.
+    """
+    src = payload.source.strip()
+    tgt = payload.target.strip()
+    if not src or not tgt:
+        raise HTTPException(status_code=400, detail="source and target are required")
+    try:
+        return storage.merge_users(src, tgt)
     except ValueError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -409,7 +435,13 @@ async def add_group_member(
     payload:  AddMemberPayload,
     _:        dict = Depends(require_admin),
 ):
-    result = group_storage.add_member(group_id, payload.username)
+    # Resolve the canonical username (exact case as stored in UserIndex / RawTelemetry).
+    # add_member() must receive the canonical name so get_raw_events() can find the data.
+    all_users = storage.get_all_users()
+    canonical = next((u for u in all_users if u.lower() == payload.username.lower()), None)
+    if canonical is None:
+        raise HTTPException(status_code=404, detail=f"Employee '{payload.username}' not found")
+    result = group_storage.add_member(group_id, canonical)
     if result is None:
         raise HTTPException(status_code=404, detail="Group not found")
     return result
@@ -437,13 +469,19 @@ async def get_group_summary(
     if not group:
         raise HTTPException(status_code=404, detail="Group not found")
 
+    # Build a lowercase → canonical map so old groups (whose members were stored
+    # in lowercase) still resolve correctly to the real RawTelemetry partition keys.
+    all_users  = storage.get_all_users()
+    canon_map  = {u.lower(): u for u in all_users}
+
     members_data = []
-    for username in group["members"]:
-        events   = storage.get_raw_events(username, date)
-        summary  = aggregate_summary(events) if events else None
-        timeline = build_timeline(events)    if events else []
+    for stored_name in group["members"]:
+        canonical = canon_map.get(stored_name.lower(), stored_name)
+        events    = storage.get_raw_events(canonical, date)
+        summary   = aggregate_summary(events) if events else None
+        timeline  = build_timeline(events)    if events else []
         members_data.append({
-            "username": username,
+            "username": canonical,
             "summary":  summary,
             "timeline": timeline,
         })

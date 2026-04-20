@@ -188,6 +188,7 @@ class TelemetryStorage:
         for date_str in dates_seen:
             _cache.invalidate(f"raw:{user}:{date_str}")
         _cache.invalidate("users")
+        _cache.invalidate("users_with_aliases")
 
         # Keep UserIndex in sync — one row per user for O(1) listing
         try:
@@ -233,6 +234,7 @@ class TelemetryStorage:
         for k in stale:
             _cache.invalidate(k)
         _cache.invalidate("users")
+        _cache.invalidate("users_with_aliases")
 
         return deleted
 
@@ -339,9 +341,98 @@ class TelemetryStorage:
         for k in stale:
             _cache.invalidate(k)
         _cache.invalidate("users")
+        _cache.invalidate("users_with_aliases")
 
         _LOG.info("rename_user: %s → %s (%d events migrated)", old, new, len(old_entities))
         return {"old_name": old, "new_name": new, "migrated": len(old_entities)}
+
+    def merge_users(self, source: str, target: str) -> dict:
+        """
+        Merge all RawTelemetry from `source` into `target`.
+
+        Use case: an agent was reinstalled and picked up a different username
+        (e.g. machine hostname changed), creating a second profile.  Admin
+        merges the old profile into the current one so history is unified.
+
+        Strategy:
+            - Re-insert every source event under the target's PartitionKey
+              using upsert, so if both users have events on the same date the
+              rows are combined (not overwritten — RowKeys encode real timestamps
+              so collisions are practically impossible between two distinct agents).
+            - Delete all source rows after the new rows are safely written.
+            - Remove source from UserIndex.
+
+        Raises ValueError if source == target or either user is not found.
+        Returns {"source", "target", "migrated": event_count}.
+        """
+        src = source.strip()
+        tgt = target.strip()
+
+        if src.lower() == tgt.lower():
+            raise ValueError("Source and target must be different users")
+
+        raw_table   = self.service.get_table_client(RAW_TABLE)
+        index_table = self.service.get_table_client(USER_INDEX_TABLE)
+
+        # Verify both users exist in UserIndex
+        existing = self.get_all_users()
+        if src not in existing:
+            raise ValueError(f"Source user '{src}' not found")
+        if tgt not in existing:
+            raise ValueError(f"Target user '{tgt}' not found")
+
+        # Fetch every raw event for source user (prefix scan)
+        lo = f"{src}_"
+        hi = f"{src}_\uffff"
+        source_entities = list(raw_table.query_entities(
+            f"PartitionKey ge '{lo}' and PartitionKey lt '{hi}'"
+        ))
+
+        # Build clean copies under the target's PartitionKey prefix
+        migrated_entities: List[Dict[str, Any]] = []
+        for e in source_entities:
+            date = e["PartitionKey"][len(src) + 1:]   # "YYYY-MM-DD"
+            migrated_entities.append({
+                "PartitionKey": f"{tgt}_{date}",
+                "RowKey":       e["RowKey"],           # timestamp-based — unique across agents
+                "timestamp":    str(e.get("timestamp", "")),
+                "app":          str(e.get("app",    "Unknown")),
+                "domain":       str(e.get("domain", "")),
+                "active":       bool(e.get("active", False)),
+                "locked":       bool(e.get("locked", False)),
+                "duration":     int(e.get("duration", 0)),
+                "device":       str(e.get("device", "")),
+            })
+
+        # Upsert migrated events into target (grouped by PartitionKey, chunks ≤ 100)
+        pk_groups: Dict[str, List] = {}
+        for e in migrated_entities:
+            pk_groups.setdefault(e["PartitionKey"], []).append(e)
+
+        for pk, entities in pk_groups.items():
+            for i in range(0, len(entities), 100):
+                chunk = entities[i:i + 100]
+                _submit_with_retry(raw_table, [("upsert", entity) for entity in chunk])
+
+        # Delete source rows only after target rows are safely written
+        self._delete_entities(raw_table, source_entities)
+
+        # Remove source from UserIndex
+        try:
+            index_table.delete_entity("users", src)
+        except Exception:
+            pass
+
+        # Invalidate cache for both users
+        stale = [k for k in list(_cache._store)
+                 if k.startswith(f"raw:{src}:") or k.startswith(f"raw:{tgt}:")]
+        for k in stale:
+            _cache.invalidate(k)
+        _cache.invalidate("users")
+        _cache.invalidate("users_with_aliases")
+
+        _LOG.info("merge_users: %s -> %s (%d events migrated)", src, tgt, len(source_entities))
+        return {"source": src, "target": tgt, "migrated": len(source_entities)}
 
     @staticmethod
     def _delete_entities(table_client, entities: list) -> int:
@@ -400,9 +491,48 @@ class TelemetryStorage:
         _cache.set(cache_key, events, ttl)
         return events
 
+    def set_alias(self, username: str, alias: str) -> bool:
+        """
+        Set a display alias for an employee without touching RawTelemetry.
+        The alias is shown in the dashboard; data is still keyed by the
+        original username the agent uses.  Returns False if user not found.
+        """
+        index_table = self.service.get_table_client(USER_INDEX_TABLE)
+        try:
+            entity = index_table.get_entity("users", username)
+            entity["alias"] = alias.strip()
+            index_table.update_entity(entity, mode="replace")
+            _cache.invalidate("users_with_aliases")
+            return True
+        except ResourceNotFoundError:
+            return False
+
+    def get_users_with_aliases(self) -> List[Dict[str, str]]:
+        """
+        Returns [{user, alias}] for all known employees.
+        alias == user when no custom display name has been set.
+        Cached for 5 minutes alongside the plain user list.
+        """
+        cached, hit = _cache.get("users_with_aliases")
+        if hit:
+            return cached
+
+        table    = self.service.get_table_client(USER_INDEX_TABLE)
+        entities = table.query_entities("PartitionKey eq 'users'", select=["RowKey", "alias", "last_seen"])
+        result   = sorted(
+            [{
+                "user":      e["RowKey"],
+                "alias":     e.get("alias") or e["RowKey"],
+                "last_seen": e.get("last_seen") or "",
+            } for e in entities],
+            key=lambda x: x["alias"].lower(),
+        )
+        _cache.set("users_with_aliases", result, 300)
+        return result
+
     def get_all_users(self) -> List[str]:
         """
-        Sorted list of known users via UserIndex — O(users), not O(events).
+        Sorted list of canonical usernames via UserIndex — O(users), not O(events).
         Cached for 5 minutes; invalidated automatically on each ingest.
         """
         cached, hit = _cache.get("users")

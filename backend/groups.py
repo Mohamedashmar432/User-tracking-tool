@@ -92,12 +92,17 @@ class GroupStorage:
             return False
 
     def add_member(self, group_id: str, username: str) -> Optional[dict]:
-        """Add a member to the group. No-op if already a member. Returns updated group."""
+        """
+        Add a member to the group.  username must already be the canonical form
+        (same case as stored in UserIndex) so that get_raw_events() can resolve it.
+        No-op if already a member (case-insensitive check).
+        Returns updated group.
+        """
         try:
             e       = self._tbl.get_entity("groups", group_id)
             members = json.loads(e.get("members", "[]"))
-            uname   = username.lower().strip()
-            if uname not in members:
+            uname   = username.strip()   # preserve case — do NOT lower()
+            if not any(m.lower() == uname.lower() for m in members):
                 members.append(uname)
                 e["members"] = json.dumps(members)
                 self._tbl.update_entity(e, mode="replace")
@@ -109,12 +114,12 @@ class GroupStorage:
             return None
 
     def remove_member(self, group_id: str, username: str) -> Optional[dict]:
-        """Remove a member from the group. Returns updated group or None if not found."""
+        """Remove a member from the group (case-insensitive match). Returns updated group."""
         try:
             e       = self._tbl.get_entity("groups", group_id)
             members = json.loads(e.get("members", "[]"))
-            uname   = username.lower().strip()
-            members = [m for m in members if m != uname]
+            uname   = username.strip().lower()
+            members = [m for m in members if m.lower() != uname]
             e["members"] = json.dumps(members)
             self._tbl.update_entity(e, mode="replace")
             return self._decode(e)

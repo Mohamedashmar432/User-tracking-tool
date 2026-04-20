@@ -6,6 +6,7 @@
     <title>Enterprise Productivity Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
@@ -76,50 +77,16 @@
             </div>
         </div>
 
-        <!-- Employee search -->
-        <div class="px-4 pt-3 pb-2 flex-shrink-0">
-            <div class="relative">
-                <i data-lucide="search" class="absolute left-3 top-2.5 w-3.5 h-3.5 text-slate-400 pointer-events-none"></i>
-                <input type="text" id="userSearch" placeholder="Search employee..."
-                       oninput="filterEmployees(this.value)"
-                       class="w-full pl-8 pr-7 py-2 text-xs border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 bg-slate-50">
-                <button id="searchClear" onclick="clearSearch()"
-                        class="hidden absolute right-2 top-1.5 p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors">
-                    <i data-lucide="x" class="w-3 h-3"></i>
-                </button>
-            </div>
-        </div>
-
-        <!-- Middle: Employees + Groups share remaining height -->
-        <div class="flex-1 flex flex-col overflow-hidden min-h-0">
-
-            <!-- Employee section -->
-            <div class="flex flex-col min-h-0" style="flex: 3;">
-                <div class="px-4 pb-1 flex-shrink-0">
-                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Employees</p>
-                </div>
-                <div id="userList" class="overflow-y-auto flex-1 min-h-0 pb-1">
-                    <div class="px-5 py-3 text-xs text-slate-400">Loading...</div>
-                </div>
-            </div>
-
-            <!-- Groups section -->
-            <div class="border-t border-slate-100 flex flex-col min-h-0" style="flex: 2;">
-                <div class="px-4 pt-2 pb-1 flex items-center justify-between flex-shrink-0">
-                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Groups</p>
-                    <button id="createGroupBtn" onclick="openCreateGroupModal()" title="New group"
-                            class="p-1 rounded-lg text-slate-400 hover:text-purple-600 hover:bg-purple-50 transition-colors">
-                        <i data-lucide="plus" class="w-3.5 h-3.5"></i>
-                    </button>
-                </div>
-                <div id="groupList" class="overflow-y-auto flex-1 min-h-0 pb-1">
-                    <div class="px-5 py-2 text-xs text-slate-400">Loading...</div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Bottom nav -->
-        <div class="border-t border-slate-100 px-3 py-3 space-y-0.5 flex-shrink-0">
+        <!-- Top nav items -->
+        <div class="px-3 pt-3 pb-2 space-y-0.5 flex-shrink-0">
+            <button id="navDashboard" onclick="showView('home')" class="nav-item w-full">
+                <i data-lucide="layout-dashboard" class="w-4 h-4 shrink-0"></i>
+                Dashboard
+            </button>
+            <button id="navEmployees" onclick="showView('employees')" class="nav-item w-full">
+                <i data-lucide="users" class="w-4 h-4 shrink-0"></i>
+                Employees
+            </button>
             <button id="navUserMgmt" onclick="showView('users')" class="nav-item w-full">
                 <i data-lucide="shield" class="w-4 h-4 shrink-0"></i>
                 User Management
@@ -128,6 +95,31 @@
                 <i data-lucide="bot" class="w-4 h-4 shrink-0"></i>
                 Agent
             </button>
+            <button id="navSettings" onclick="showView('settings')" class="nav-item w-full">
+                <i data-lucide="settings" class="w-4 h-4 shrink-0"></i>
+                Settings
+            </button>
+        </div>
+
+        <!-- Projects/Teams/Groups section — fills remaining space -->
+        <div class="border-t border-slate-100 flex flex-col flex-1 overflow-hidden min-h-0 pt-2">
+            <div class="px-4 pb-1 flex items-center justify-between flex-shrink-0">
+                <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Projects/Teams/Groups</p>
+                <button id="createGroupBtn" onclick="openCreateGroupModal()" title="New project team / group"
+                        class="p-1 rounded-lg text-slate-400 hover:text-purple-600 hover:bg-purple-50 transition-colors">
+                    <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+                </button>
+            </div>
+            <div id="groupList" class="overflow-y-auto flex-1 min-h-0 pb-1">
+                <div class="px-5 py-2 text-xs text-slate-400">Loading...</div>
+            </div>
+        </div>
+
+        <!-- Hidden employee list — kept for data only, not shown -->
+        <div class="hidden" aria-hidden="true">
+            <input id="userSearch" type="text">
+            <button id="searchClear"></button>
+            <div id="userList"></div>
         </div>
 
         <!-- Footer: version + logout -->
@@ -180,6 +172,18 @@
                 </div>
             </div>
 
+            <!-- Teams / Groups rows -->
+            <div id="dashTeamsSection" class="mb-6">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="font-bold text-slate-800">Projects / Teams / Groups</h3>
+                    <span id="dashTeamsLoading" class="text-xs text-slate-400 hidden flex items-center gap-1">
+                        <i data-lucide="loader-2" class="w-3 h-3 animate-spin"></i> Loading...
+                    </span>
+                </div>
+                <div id="dashTeamsGrid" class="space-y-2"></div>
+                <div id="dashTeamsEmpty" class="hidden text-xs text-slate-400 py-2">No project teams created yet.</div>
+            </div>
+
             <!-- User table -->
             <div class="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
                 <div class="flex items-center justify-between px-6 py-4 border-b border-slate-100">
@@ -204,6 +208,58 @@
                     <i data-lucide="users" class="w-10 h-10 mx-auto mb-3 text-slate-300"></i>
                     <p class="font-medium">No employees found</p>
                     <p class="text-xs mt-1">Install the agent on employee machines to start tracking</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- ============================================================
+             VIEW: EMPLOYEES
+        ============================================================ -->
+        <div id="viewEmployees" class="hidden p-8 space-y-6">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h2 class="text-2xl font-bold text-slate-900">Employees</h2>
+                    <p class="text-sm text-slate-400 mt-0.5">All onboarded employees</p>
+                </div>
+                <div class="flex items-center gap-3">
+                    <div class="relative">
+                        <i data-lucide="search" class="absolute left-3 top-2.5 w-3.5 h-3.5 text-slate-400 pointer-events-none"></i>
+                        <input type="text" id="empSearch" placeholder="Search employee..." oninput="filterEmpList(this.value)"
+                               class="pl-9 pr-4 py-2 text-sm border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 bg-white w-52">
+                    </div>
+                    <!-- View toggle -->
+                    <div class="flex items-center border border-slate-200 rounded-xl overflow-hidden">
+                        <button id="empViewCard" onclick="setEmpView('card')" title="Card view"
+                                class="p-2 text-indigo-600 bg-indigo-50 transition-all">
+                            <i data-lucide="layout-grid" class="w-4 h-4"></i>
+                        </button>
+                        <button id="empViewRow" onclick="setEmpView('row')" title="Row view"
+                                class="p-2 text-slate-400 hover:bg-slate-50 transition-all">
+                            <i data-lucide="list" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <!-- Top stat cards -->
+            <div class="grid grid-cols-3 gap-4">
+                <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide">Onboarded Employees</p>
+                    <p id="empStatTotal" class="text-3xl font-black text-slate-800 mt-1">—</p>
+                </div>
+                <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide">Active Today</p>
+                    <p id="empStatActive" class="text-3xl font-black text-emerald-600 mt-1">—</p>
+                </div>
+                <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide">Offline Today</p>
+                    <p id="empStatOffline" class="text-3xl font-black text-slate-400 mt-1">—</p>
+                </div>
+            </div>
+            <!-- Employee list -->
+            <div id="empGrid" class="grid grid-cols-1 gap-3">
+                <div class="text-center py-12 text-slate-400">
+                    <i data-lucide="loader-2" class="w-8 h-8 mx-auto mb-3 animate-spin text-slate-300"></i>
+                    <p>Loading employees...</p>
                 </div>
             </div>
         </div>
@@ -288,6 +344,19 @@
                 </div>
             </div>
 
+            <!-- 24h Peak Activity chart -->
+            <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+                <div class="flex items-center justify-between mb-1">
+                    <h3 class="font-bold text-slate-800">24-Hour Activity Pattern</h3>
+                    <div class="flex items-center gap-3 text-xs text-slate-400">
+                        <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-sm bg-indigo-500 inline-block"></span>Peak</span>
+                        <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-sm bg-indigo-200 inline-block"></span>Active</span>
+                    </div>
+                </div>
+                <p class="text-xs text-slate-400 mb-4">Active minutes per hour — darker bars are peak productivity hours</p>
+                <div class="chart-container"><canvas id="peakChart"></canvas></div>
+            </div>
+
             <!-- App table -->
             <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
                 <div class="px-6 py-4 border-b border-slate-100 font-bold text-slate-800">Application Details</div>
@@ -326,6 +395,11 @@
                         <i data-lucide="user-plus" class="w-3.5 h-3.5"></i>
                         Add Member
                     </button>
+                    <button id="groupExportBtn" onclick="openExportModal('group')"
+                            class="flex items-center gap-2 px-3 py-2 border border-indigo-200 text-indigo-600 text-xs font-semibold rounded-xl hover:bg-indigo-50 transition-all">
+                        <i data-lucide="download" class="w-3.5 h-3.5"></i>
+                        Export
+                    </button>
                     <button id="deleteGroupBtn" onclick="confirmDeleteGroup()"
                             class="flex items-center gap-2 px-3 py-2 border border-rose-200 text-rose-500 text-xs font-semibold rounded-xl hover:bg-rose-50 transition-all">
                         <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
@@ -335,7 +409,7 @@
             </header>
 
             <!-- Group stats row -->
-            <div class="grid grid-cols-3 gap-4">
+            <div class="grid grid-cols-4 gap-4">
                 <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
                     <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide">Members</p>
                     <p id="groupStatMembers" class="text-3xl font-black text-slate-800 mt-1">—</p>
@@ -347,6 +421,10 @@
                 <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
                     <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide">Avg Productivity</p>
                     <p id="groupStatScore" class="text-3xl font-black text-indigo-600 mt-1">—</p>
+                </div>
+                <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide">Avg Active Hours</p>
+                    <p id="groupStatAvgHours" class="text-3xl font-black text-purple-600 mt-1">—</p>
                 </div>
             </div>
 
@@ -365,7 +443,7 @@
                             <th class="px-6 py-3 text-center">Productivity</th>
                             <th class="px-6 py-3 text-center">Active Time</th>
                             <th class="px-6 py-3 text-center">Status</th>
-                            <th class="px-6 py-3 text-right">Actions</th>
+                            <th class="px-6 py-3 w-12"></th>
                         </tr>
                     </thead>
                     <tbody id="groupTableBody" class="divide-y divide-slate-100"></tbody>
@@ -523,6 +601,130 @@
             </div>
         </div>
 
+        <!-- ============================================================
+             VIEW: SETTINGS
+        ============================================================ -->
+        <div id="viewSettings" class="hidden p-8 space-y-8">
+            <div>
+                <h2 class="text-2xl font-bold text-slate-900">Settings</h2>
+                <p class="text-sm text-slate-400 mt-1">Admin configuration and employee data management</p>
+            </div>
+
+            <!-- Employee Data Management -->
+            <div>
+                <p class="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Employee Data Management</p>
+                <div class="space-y-4">
+
+                    <!-- Rename Employee -->
+                    <div class="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+                        <div class="flex items-start gap-4">
+                            <div class="bg-indigo-50 p-3 rounded-xl text-indigo-600 shrink-0">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                            </div>
+                            <div class="flex-1 min-w-0">
+                                <h4 class="font-semibold text-slate-800">Set Display Name</h4>
+                                <p class="text-sm text-slate-400 mt-0.5 mb-5">Change how an employee's name appears in the dashboard. The original system username (used by the agent) stays unchanged — no data is moved, and the agent keeps reporting without creating duplicates.</p>
+                                <div class="flex items-end gap-3 flex-wrap">
+                                    <div class="flex-1 min-w-36">
+                                        <label class="block text-xs font-semibold text-slate-500 uppercase mb-1.5">Employee</label>
+                                        <select id="stRenameEmployee"
+                                                class="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500 bg-white">
+                                            <option value="">— select employee —</option>
+                                        </select>
+                                    </div>
+                                    <div class="pb-2.5 text-slate-400 shrink-0">
+                                        <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+                                    </div>
+                                    <div class="flex-1 min-w-36">
+                                        <label class="block text-xs font-semibold text-slate-500 uppercase mb-1.5">Display Name</label>
+                                        <input id="stRenameNewName" type="text" autocomplete="off" placeholder="e.g. John Doe"
+                                               class="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500">
+                                    </div>
+                                    <button onclick="settingsRename()" id="stRenameBtn"
+                                            class="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl text-sm transition-all shrink-0">
+                                        Save
+                                    </button>
+                                </div>
+                                <div id="stRenameMsg" class="hidden mt-3 text-xs px-3 py-2 rounded-lg"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Merge Employees -->
+                    <div class="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+                        <div class="flex items-start gap-4">
+                            <div class="bg-amber-50 p-3 rounded-xl text-amber-600 shrink-0">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/></svg>
+                            </div>
+                            <div class="flex-1 min-w-0">
+                                <h4 class="font-semibold text-slate-800">Merge Employees</h4>
+                                <p class="text-sm text-slate-400 mt-0.5 mb-5">Move all sessions from one profile into another. Use when an agent reinstall created a duplicate employee profile. The source is permanently deleted after merge.</p>
+                                <div class="flex items-end gap-3 flex-wrap">
+                                    <div class="flex-1 min-w-36">
+                                        <label class="block text-xs font-semibold text-slate-500 uppercase mb-1.5">Move FROM (source)</label>
+                                        <select id="stMergeSource" onchange="stSyncMergeTargets()"
+                                                class="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-amber-400 bg-white">
+                                            <option value="">— select source —</option>
+                                        </select>
+                                        <p class="text-xs text-rose-500 mt-1 font-medium">will be deleted</p>
+                                    </div>
+                                    <div class="pb-7 text-slate-400 shrink-0">
+                                        <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+                                    </div>
+                                    <div class="flex-1 min-w-36">
+                                        <label class="block text-xs font-semibold text-slate-500 uppercase mb-1.5">Merge INTO (target)</label>
+                                        <select id="stMergeTarget"
+                                                class="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-amber-400 bg-white">
+                                            <option value="">— select target —</option>
+                                        </select>
+                                        <p class="text-xs text-emerald-600 mt-1 font-medium">keeps all data</p>
+                                    </div>
+                                    <button onclick="settingsMerge()" id="stMergeBtn"
+                                            class="px-5 py-2.5 bg-amber-500 hover:bg-amber-600 text-white font-semibold rounded-xl text-sm transition-all shrink-0 mb-5">
+                                        Merge &amp; Delete Source
+                                    </button>
+                                </div>
+                                <div id="stMergeMsg" class="hidden mt-1 text-xs px-3 py-2 rounded-lg"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Delete Employee -->
+                    <div class="bg-white rounded-2xl border border-rose-100 p-6 shadow-sm">
+                        <div class="flex items-start gap-4">
+                            <div class="bg-rose-50 p-3 rounded-xl text-rose-600 shrink-0">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+                            </div>
+                            <div class="flex-1 min-w-0">
+                                <h4 class="font-semibold text-slate-800">Delete Employee</h4>
+                                <p class="text-sm text-slate-400 mt-0.5 mb-5">Permanently remove all telemetry data for an employee — every session, app usage record, and timeline event. <strong class="text-slate-600">This cannot be undone.</strong></p>
+                                <div class="flex items-end gap-3 flex-wrap">
+                                    <div class="flex-1 min-w-36">
+                                        <label class="block text-xs font-semibold text-slate-500 uppercase mb-1.5">Employee</label>
+                                        <select id="stDeleteEmployee" onchange="stSyncDeleteConfirm()"
+                                                class="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-rose-400 bg-white">
+                                            <option value="">— select employee —</option>
+                                        </select>
+                                    </div>
+                                    <div class="flex-1 min-w-36">
+                                        <label class="block text-xs font-semibold text-slate-500 uppercase mb-1.5">Type username to confirm</label>
+                                        <input id="stDeleteConfirm" type="text" autocomplete="off" placeholder=""
+                                               class="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-rose-400">
+                                    </div>
+                                    <button onclick="settingsDelete()" id="stDeleteBtn"
+                                            class="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-semibold rounded-xl text-sm transition-all shrink-0">
+                                        Delete
+                                    </button>
+                                </div>
+                                <div id="stDeleteMsg" class="hidden mt-3 text-xs px-3 py-2 rounded-lg"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+
     </main>
 </div><!-- /appShell -->
 
@@ -602,21 +804,21 @@
     <div class="bg-white rounded-3xl shadow-2xl w-full max-w-sm p-8">
         <div class="flex items-center gap-3 mb-2">
             <div class="bg-indigo-50 p-2.5 rounded-xl text-indigo-600"><i data-lucide="pencil" class="w-5 h-5"></i></div>
-            <h3 class="text-lg font-bold text-slate-800">Rename Employee</h3>
+            <h3 class="text-lg font-bold text-slate-800">Set Display Name</h3>
         </div>
-        <p class="text-sm text-slate-400 mb-6">Current: <strong id="renameOldName" class="text-slate-700"></strong></p>
+        <p class="text-sm text-slate-400 mb-6">Employee: <strong id="renameOldName" class="text-slate-700"></strong></p>
         <form onsubmit="submitRename(event)" class="space-y-4">
             <div>
-                <label class="block text-xs font-semibold text-slate-500 uppercase mb-1.5">New Username</label>
+                <label class="block text-xs font-semibold text-slate-500 uppercase mb-1.5">Display Name</label>
                 <input id="renameNewName" type="text" required autocomplete="off"
                        class="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500"
-                       placeholder="Enter new username">
-                <p class="text-xs text-slate-400 mt-1.5">Lowercase only · all historical data will be migrated</p>
+                       placeholder="e.g. John Doe">
+                <p class="text-xs text-slate-400 mt-1.5">Dashboard label only — agent username and data are not affected</p>
             </div>
             <div id="renameError" class="hidden text-xs text-rose-600 bg-rose-50 px-3 py-2 rounded-lg"></div>
             <div class="flex gap-3 pt-2">
                 <button type="button" onclick="closeRenameModal()" class="flex-1 py-2.5 border border-slate-200 text-slate-600 font-semibold rounded-xl text-sm hover:bg-slate-50">Cancel</button>
-                <button type="submit" id="renameSaveBtn" class="flex-1 py-2.5 bg-indigo-600 text-white font-semibold rounded-xl text-sm hover:bg-indigo-700">Rename</button>
+                <button type="submit" id="renameSaveBtn" class="flex-1 py-2.5 bg-indigo-600 text-white font-semibold rounded-xl text-sm hover:bg-indigo-700">Save</button>
             </div>
         </form>
     </div>
@@ -679,6 +881,64 @@
     </div>
 </div>
 
+<!-- Export Modal -->
+<div id="exportModal" class="hidden fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+    <div class="bg-white rounded-3xl shadow-2xl w-full max-w-md p-8">
+        <div class="flex items-center gap-3 mb-6">
+            <div class="bg-indigo-50 p-2.5 rounded-xl text-indigo-600"><i data-lucide="download" class="w-5 h-5"></i></div>
+            <div>
+                <h3 class="text-lg font-bold text-slate-800">Export Data</h3>
+                <p class="text-xs text-slate-400 mt-0.5">Download as Excel (.xlsx)</p>
+            </div>
+        </div>
+        <div class="space-y-4">
+            <div>
+                <label class="text-xs font-semibold text-slate-600 uppercase tracking-wide">Date</label>
+                <input type="date" id="exportDate" class="w-full mt-1.5 px-3 py-2.5 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500">
+            </div>
+            <div>
+                <label class="text-xs font-semibold text-slate-600 uppercase tracking-wide">Employees</label>
+                <select id="exportScope" class="w-full mt-1.5 px-3 py-2.5 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500 bg-white">
+                    <option value="all">All Employees</option>
+                </select>
+            </div>
+            <div>
+                <label class="text-xs font-semibold text-slate-600 uppercase tracking-wide">Include Sheets</label>
+                <div class="mt-2 space-y-2">
+                    <label class="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                        <input type="checkbox" id="exportSheetSummary" checked class="rounded"> Summary (productivity scores &amp; active time)
+                    </label>
+                    <label class="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                        <input type="checkbox" id="exportSheetApps" checked class="rounded"> All App Usage
+                    </label>
+                    <label class="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                        <input type="checkbox" id="exportSheetProductive" checked class="rounded"> Productive Apps Only
+                    </label>
+                    <label class="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                        <input type="checkbox" id="exportSheetUnproductive" checked class="rounded"> Unproductive Apps Only
+                    </label>
+                    <label class="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                        <input type="checkbox" id="exportSheetTimeline" class="rounded"> Hourly Timeline
+                    </label>
+                </div>
+            </div>
+        </div>
+        <div id="exportError" class="hidden text-xs text-rose-600 bg-rose-50 px-3 py-2 rounded-lg mt-4"></div>
+        <div id="exportProgress" class="hidden text-xs text-indigo-600 bg-indigo-50 px-3 py-2 rounded-lg mt-4 flex items-center gap-2">
+            <i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i>
+            <span id="exportProgressText">Preparing export...</span>
+        </div>
+        <div class="flex gap-3 mt-6">
+            <button onclick="closeExportModal()" class="flex-1 py-2.5 border border-slate-200 text-slate-600 font-semibold rounded-xl text-sm hover:bg-slate-50">Cancel</button>
+            <button onclick="submitExport()" id="exportSubmitBtn" class="flex-1 py-2.5 bg-indigo-600 text-white font-semibold rounded-xl text-sm hover:bg-indigo-700">Download</button>
+        </div>
+    </div>
+</div>
+
+<!-- Floating action menu (three-dot dropdown) -->
+<div id="actionMenu" class="hidden fixed z-[200] bg-white border border-slate-200 rounded-2xl shadow-xl py-1.5 min-w-[180px]" style="transition:opacity .1s">
+</div>
+
 <!-- =====================================================================
      JAVASCRIPT
 ===================================================================== -->
@@ -686,6 +946,43 @@
 // ── Constants ────────────────────────────────────────────────────────────────────
 const SERVER_BASE = window.location.origin;
 const API_BASE    = SERVER_BASE + '/api';
+
+// ── Floating action menu ─────────────────────────────────────────────────────────
+const _menu = document.getElementById('actionMenu');
+let _menuOpen = false;
+
+function openActionMenu(triggerEl, items) {
+    _menu.innerHTML = '';
+    items.forEach(item => {
+        if (item.divider) {
+            const sep = document.createElement('div');
+            sep.className = 'my-1 border-t border-slate-100';
+            _menu.appendChild(sep);
+            return;
+        }
+        const btn = document.createElement('button');
+        btn.className = `w-full text-left px-4 py-2.5 text-sm flex items-center gap-3 transition-colors hover:bg-slate-50 ${item.danger ? 'text-rose-600 hover:bg-rose-50' : 'text-slate-700'}`;
+        btn.innerHTML = `<i data-lucide="${item.icon}" class="w-4 h-4 shrink-0 ${item.danger ? 'text-rose-400' : 'text-slate-400'}"></i>${item.label}`;
+        btn.onclick = (e) => { e.stopPropagation(); closeActionMenu(); item.action(); };
+        _menu.appendChild(btn);
+    });
+    lucide.createIcons({ nodes: [..._menu.querySelectorAll('[data-lucide]')] });
+
+    // Position: prefer below-right of trigger, flip left if off-screen
+    const rect = triggerEl.getBoundingClientRect();
+    _menu.style.top  = (rect.bottom + 4) + 'px';
+    _menu.style.left = Math.min(rect.right - 180, window.innerWidth - 196) + 'px';
+    _menu.classList.remove('hidden');
+    _menuOpen = true;
+}
+
+function closeActionMenu() {
+    _menu.classList.add('hidden');
+    _menuOpen = false;
+}
+
+document.addEventListener('click', () => { if (_menuOpen) closeActionMenu(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && _menuOpen) closeActionMenu(); });
 
 // ── Auth state ───────────────────────────────────────────────────────────────────
 let authToken   = localStorage.getItem('token') || '';
@@ -732,8 +1029,14 @@ const STATUS_ONLINE_MINUTES = 5;
 
 function computeStatus(timeline) {
     if (!timeline || !timeline.length) return { status: 'offline', since: null };
-    const last     = timeline[timeline.length - 1];
-    const lastTime = new Date(last.timestamp + (last.timestamp.endsWith('Z') ? '' : 'Z'));
+    const last = timeline[timeline.length - 1];
+    // Use last_timestamp (end of the merged run) not timestamp (start of the run).
+    // Without this, a 30-min single-app session merges into one entry whose
+    // "timestamp" is 30 min old → incorrectly reported as offline.
+    const rawTs  = last.last_timestamp || last.timestamp;
+    // Python isoformat() emits "+00:00" not "Z". Replace any tz offset with "Z".
+    const normTs   = rawTs.replace(/[+-]\d{2}:\d{2}$/, 'Z');
+    const lastTime = new Date(normTs);
     const minsAgo  = (Date.now() - lastTime.getTime()) / 60000;
     if (minsAgo > STATUS_ONLINE_MINUTES) return { status: 'offline', since: lastTime };
     if (last.locked) return { status: 'offline',   since: lastTime };
@@ -800,10 +1103,13 @@ async function initApp() {
     const isAdmin = currentUser.role === 'admin';
     if (!isAdmin) {
         document.getElementById('navUserMgmt').style.display    = 'none';
+        document.getElementById('navSettings').style.display    = 'none';
         document.getElementById('createGroupBtn').style.display = 'none';
     } else {
         document.getElementById('userDetailRenameBtn').classList.remove('hidden');
     }
+    document.getElementById('groupExportBtn').style.display = isAdmin ? '' : 'none';
+    window._isAdmin = isAdmin;
     document.getElementById('loggedInAs').textContent = currentUser.username;
 
     // Wire download links
@@ -817,10 +1123,8 @@ async function initApp() {
     try {
         const h = await fetch(`${API_BASE}/health`);
         const d = await h.json();
-        const mins = Math.round((Date.now() - new Date(d.started_at)) / 60000);
-        const up   = mins < 60 ? `${mins}m` : `${Math.round(mins/60)}h`;
         document.getElementById('serverDot').className       = 'w-2 h-2 rounded-full bg-green-400 shrink-0';
-        document.getElementById('serverVersion').textContent  = `v${d.version} · ${up}`;
+        document.getElementById('serverVersion').textContent  = `v${d.version}`;
     } catch {
         document.getElementById('serverDot').className       = 'w-2 h-2 rounded-full bg-red-400 shrink-0';
         document.getElementById('serverVersion').textContent  = 'offline';
@@ -836,6 +1140,7 @@ async function initApp() {
 
     setInterval(() => {
         if (_activeView === 'home')       loadOverview();
+        if (_activeView === 'employees')  loadEmployees();
         if (_activeView === 'userDetail' && _currentUserId)  loadUserData();
         if (_activeView === 'group'      && _currentGroupId) loadGroupData();
     }, 60000);
@@ -846,13 +1151,13 @@ let _activeView = '';
 
 function showView(view) {
     _activeView = view;
-    const views = ['viewHome','viewUserDetail','viewGroup','viewUsers','viewAgent'];
+    const views = ['viewHome','viewEmployees','viewUserDetail','viewGroup','viewUsers','viewAgent','viewSettings'];
     views.forEach(id => document.getElementById(id).classList.add('hidden'));
     const el = document.getElementById(`view${view.charAt(0).toUpperCase() + view.slice(1)}`);
     if (el) el.classList.remove('hidden');
 
-    const navMap = { users: 'navUserMgmt', agent: 'navAgent' };
-    ['navUserMgmt','navAgent'].forEach(id => {
+    const navMap = { home: 'navDashboard', employees: 'navEmployees', users: 'navUserMgmt', agent: 'navAgent', settings: 'navSettings' };
+    ['navDashboard','navEmployees','navUserMgmt','navAgent','navSettings'].forEach(id => {
         const n = document.getElementById(id);
         if (n) n.classList.remove('active');
     });
@@ -865,21 +1170,37 @@ function showView(view) {
         document.querySelectorAll('.sidebar-group').forEach(el => el.classList.remove('active'));
     }
 
-    if (view === 'home')   loadOverview();
-    if (view === 'users')  loadAuthUsers();
+    if (view === 'home')      loadOverview();
+    if (view === 'employees') loadEmployees();
+    if (view === 'users')     loadAuthUsers();
+    if (view === 'settings')  loadSettings();
     if (view === 'group' && _currentGroupId) loadGroupData();
 }
 
 // ── Sidebar employees ─────────────────────────────────────────────────────────────
-let _allEmployees  = [];
-let _currentUserId = null;
+// _allEmployees    : canonical usernames (string[]) — used for API calls
+// _employeeAliases : {username → display label} — used for display only
+// _employeeLastSeen: {username → ISO timestamp} — fallback when today's timeline is empty
+let _allEmployees     = [];
+let _employeeAliases  = {};
+let _employeeLastSeen = {};
+let _currentUserId   = null;
+
+function aliasFor(u) { return _employeeAliases[u] || u; }
 
 async function fetchSidebarUsers() {
     try {
-        const res   = await apiFetch(`${API_BASE}/users`);
-        _allEmployees = (await res.json()).map(u => u.user);
+        const res  = await apiFetch(`${API_BASE}/users`);
+        const data = await res.json();   // [{user, alias}]
+        _allEmployees     = data.map(d => d.user);
+        _employeeAliases  = {};
+        _employeeLastSeen = {};
+        data.forEach(d => {
+            _employeeAliases[d.user]  = d.alias;
+            if (d.last_seen) _employeeLastSeen[d.user] = d.last_seen;
+        });
         const q = document.getElementById('userSearch').value;
-        renderSidebarUsers(q ? _allEmployees.filter(u => u.toLowerCase().includes(q.toLowerCase())) : _allEmployees);
+        renderSidebarUsers(q ? _allEmployees.filter(u => aliasFor(u).toLowerCase().includes(q.toLowerCase())) : _allEmployees);
     } catch(e) { if (e.message !== 'Session expired') console.error(e); }
 }
 
@@ -892,9 +1213,12 @@ function renderSidebarUsers(users) {
     }
     users.forEach(u => {
         const div = document.createElement('div');
-        div.className    = 'sidebar-user';
+        div.className        = 'sidebar-user';
         div.dataset.username = u;
-        div.innerHTML = `<i data-lucide="user" class="w-3.5 h-3.5 shrink-0 text-slate-400"></i><span class="truncate">${u}</span>`;
+        const label = aliasFor(u);
+        const sub   = label !== u ? `<span class="text-xs text-slate-400 truncate">${u}</span>` : '';
+        div.innerHTML = `<i data-lucide="user" class="w-3.5 h-3.5 shrink-0 text-slate-400"></i>
+            <span class="flex flex-col min-w-0"><span class="truncate">${label}</span>${sub}</span>`;
         div.onclick = () => selectUser(u);
         list.appendChild(div);
     });
@@ -905,7 +1229,8 @@ function filterEmployees(q) {
     const clear = document.getElementById('searchClear');
     clear.classList.toggle('hidden', !q);
     const filtered = q
-        ? _allEmployees.filter(u => u.toLowerCase().includes(q.toLowerCase()))
+        ? _allEmployees.filter(u => aliasFor(u).toLowerCase().includes(q.toLowerCase())
+                                 || u.toLowerCase().includes(q.toLowerCase()))
         : _allEmployees;
     renderSidebarUsers(filtered);
 }
@@ -1003,17 +1328,87 @@ async function loadOverview() {
         document.getElementById('statActive').textContent   = activeCount;
         document.getElementById('statAvgScore').textContent = scored.length ? `${avgScore}%` : '—';
 
+        // Render teams as rows with live stats
+        const teamsGrid  = document.getElementById('dashTeamsGrid');
+        const teamsEmpty = document.getElementById('dashTeamsEmpty');
+        teamsGrid.innerHTML = '';
+        try {
+            const grpRes = await apiFetch(`${API_BASE}/groups`);
+            const groups = await grpRes.json();
+            if (!groups.length) {
+                teamsEmpty.classList.remove('hidden');
+            } else {
+                teamsEmpty.classList.add('hidden');
+                // Fetch live summary for each group in parallel
+                const teamStats = await Promise.all(groups.map(async g => {
+                    try {
+                        const r = await apiFetch(`${API_BASE}/groups/${g.id}/summary?date=${date}`);
+                        const d = await r.json();
+                        const members = d.members || [];
+                        const scored  = members.filter(m => m.summary);
+                        const active  = members.filter(m => computeStatus(m.timeline || []).status === 'available').length;
+                        const avgScore = scored.length ? Math.round(scored.reduce((s,m) => s + m.summary.productivity_score, 0) / scored.length) : null;
+                        const avgActiveHrs = scored.length
+                            ? ((scored.reduce((s,m) => s + (m.summary.total_active_time||0) + (m.summary.total_idle_time||0), 0) / scored.length) / 3600).toFixed(1)
+                            : null;
+                        return { g, totalMembers: g.members.length, active, avgScore, avgActiveHrs };
+                    } catch { return { g, totalMembers: g.members.length, active: 0, avgScore: null, avgActiveHrs: null }; }
+                }));
+
+                teamStats.forEach(({ g, totalMembers, active, avgScore, avgActiveHrs }) => {
+                    const row = document.createElement('div');
+                    row.className = 'bg-white rounded-2xl border border-slate-200 px-5 py-4 flex items-center gap-6 cursor-pointer hover:border-indigo-300 hover:shadow-sm transition-all group';
+                    row.onclick = () => { _currentGroupId = g.id; showView('group'); };
+                    row.innerHTML = `
+                        <div class="bg-purple-100 p-2 rounded-xl shrink-0">
+                            <i data-lucide="folder" class="w-4 h-4 text-purple-600"></i>
+                        </div>
+                        <div class="flex-1 min-w-0">
+                            <p class="font-bold text-slate-800 group-hover:text-indigo-600 transition-colors truncate">${g.name}</p>
+                            <p class="text-xs text-slate-400">${totalMembers} member${totalMembers !== 1 ? 's' : ''}</p>
+                        </div>
+                        <div class="flex items-center gap-8 shrink-0">
+                            <div class="text-center">
+                                <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide">Avg Active Hours</p>
+                                <p class="text-lg font-black text-slate-800 mt-0.5">${avgActiveHrs !== null ? avgActiveHrs + 'h' : '—'}</p>
+                            </div>
+                            <div class="text-center">
+                                <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide">Total Members</p>
+                                <p class="text-lg font-black text-slate-800 mt-0.5">${totalMembers}</p>
+                            </div>
+                            <div class="text-center">
+                                <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide">Active Now</p>
+                                <p class="text-lg font-black text-emerald-600 mt-0.5">${active}</p>
+                            </div>
+                            <div class="text-center">
+                                <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide">Avg Productivity</p>
+                                <p class="text-lg font-black text-indigo-600 mt-0.5">${avgScore !== null ? avgScore + '%' : '—'}</p>
+                            </div>
+                        </div>
+                        <div class="shrink-0 text-indigo-400 group-hover:text-indigo-600 transition-colors">
+                            <i data-lucide="chevron-right" class="w-5 h-5"></i>
+                        </div>`;
+                    teamsGrid.appendChild(row);
+                });
+                lucide.createIcons({ nodes: [...teamsGrid.querySelectorAll('[data-lucide]')] });
+            }
+        } catch(e) { console.error('teams load:', e); }
+
         rows.forEach(r => {
             const score      = r.summary?.productivity_score ?? null;
-            const activeTime = r.summary?.total_active_time  ?? null;
+            const activeTime = r.summary !== null ? (r.summary.total_active_time + r.summary.total_idle_time) : null;
+            const displayName = aliasFor(r.username);
             const tr = document.createElement('tr');
             tr.className = 'hover:bg-slate-50 transition-colors cursor-pointer';
             tr.onclick   = () => selectUser(r.username);
             tr.innerHTML = `
                 <td class="px-6 py-4">
                     <div class="flex items-center gap-3">
-                        <div class="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold text-sm shrink-0">${r.username[0].toUpperCase()}</div>
-                        <span class="font-medium text-slate-800">${r.username}</span>
+                        <div class="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold text-sm shrink-0">${displayName[0].toUpperCase()}</div>
+                        <div>
+                            <span class="font-medium text-slate-800">${displayName}</span>
+                            ${displayName !== r.username ? `<p class="text-xs text-slate-400">${r.username}</p>` : ''}
+                        </div>
                     </div>
                 </td>
                 <td class="px-6 py-4 text-center">
@@ -1028,14 +1423,12 @@ async function loadOverview() {
                 <td class="px-6 py-4 text-center text-sm text-slate-500">${activeTime !== null ? formatDuration(activeTime) : '—'}</td>
                 <td class="px-6 py-4 text-center">${statusBadge(r.status)}</td>
                 <td class="px-6 py-4 text-right">
-                    <div class="flex items-center justify-end gap-2">
-                        ${currentUser?.role === 'admin' ? `
-                        <button onclick="event.stopPropagation(); openRenameModal('${r.username}')"
-                                class="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all" title="Rename">
-                            <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-                        </button>` : ''}
-                        <button class="text-xs text-indigo-600 hover:text-indigo-800 font-semibold px-3 py-1.5 rounded-lg hover:bg-indigo-50 transition-all">View details →</button>
-                    </div>
+                    <button onclick="event.stopPropagation();openActionMenu(this,[
+                        {icon:'user',label:'View Profile',action:()=>selectUser('${r.username}')},
+                        ...(window._isAdmin?[{icon:'download',label:'Export Data',action:()=>openExportModal('employee','${r.username}')}]:[])
+                    ])" class="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-all">
+                        <i data-lucide="more-vertical" class="w-4 h-4"></i>
+                    </button>
                 </td>`;
             tbody.appendChild(tr);
         });
@@ -1043,8 +1436,184 @@ async function loadOverview() {
     loading.classList.add('hidden');
 }
 
+// ── Employees view ────────────────────────────────────────────────────────────────
+let _empListData = [];
+
+async function loadEmployees() {
+    const today = getTodayDate();
+    const grid  = document.getElementById('empGrid');
+    grid.innerHTML = `<div class="text-center py-12 text-slate-400">
+        <i data-lucide="loader-2" class="w-8 h-8 mx-auto mb-3 animate-spin text-slate-300"></i>
+        <p>Loading employees...</p></div>`;
+    lucide.createIcons({ nodes: [...grid.querySelectorAll('[data-lucide]')] });
+
+    try {
+        const res   = await apiFetch(`${API_BASE}/users`);
+        const users = await res.json();
+        document.getElementById('empStatTotal').textContent = users.length;
+
+        const rows = await Promise.all(users.map(async u => {
+            try {
+                const [sumRes, tlRes] = await Promise.all([
+                    apiFetch(`${API_BASE}/user-summary?user=${u.user}&date=${today}`),
+                    apiFetch(`${API_BASE}/user-timeline?user=${u.user}&date=${today}`),
+                ]);
+                const summary  = sumRes.ok ? await sumRes.json() : null;
+                const timeline = tlRes.ok  ? await tlRes.json()  : [];
+                const { status } = computeStatus(timeline);
+                return { user: u.user, alias: u.alias, summary, status };
+            } catch { return { user: u.user, alias: u.alias, summary: null, status: 'offline' }; }
+        }));
+
+        _empListData = rows;
+        const activeCount  = rows.filter(r => r.status === 'available').length;
+        const offlineCount = rows.filter(r => r.status === 'offline').length;
+        document.getElementById('empStatActive').textContent  = activeCount;
+        document.getElementById('empStatOffline').textContent = offlineCount;
+
+        renderEmpGrid(rows);
+    } catch (e) { if (e.message !== 'Session expired') console.error(e); }
+}
+
+function filterEmpList(q) {
+    const filtered = q
+        ? _empListData.filter(r => r.alias.toLowerCase().includes(q.toLowerCase()) || r.user.toLowerCase().includes(q.toLowerCase()))
+        : _empListData;
+    renderEmpGrid(filtered);
+}
+
+let _empViewMode = 'card';
+
+function setEmpView(mode) {
+    _empViewMode = mode;
+    document.getElementById('empViewCard').className = mode === 'card'
+        ? 'p-2 text-indigo-600 bg-indigo-50 transition-all'
+        : 'p-2 text-slate-400 hover:bg-slate-50 transition-all';
+    document.getElementById('empViewRow').className = mode === 'row'
+        ? 'p-2 text-indigo-600 bg-indigo-50 transition-all'
+        : 'p-2 text-slate-400 hover:bg-slate-50 transition-all';
+    renderEmpGrid(_empListData.filter(r => {
+        const q = document.getElementById('empSearch').value;
+        return !q || r.alias.toLowerCase().includes(q.toLowerCase()) || r.user.toLowerCase().includes(q.toLowerCase());
+    }));
+}
+
+function renderEmpGrid(rows) {
+    const grid   = document.getElementById('empGrid');
+    const isAdmin = window._isAdmin;
+    if (!rows.length) {
+        grid.className = 'grid grid-cols-1 gap-3';
+        grid.innerHTML = `<div class="text-center py-12 text-slate-400"><i data-lucide="users" class="w-10 h-10 mx-auto mb-3 text-slate-300"></i><p class="font-medium">No employees found</p></div>`;
+        lucide.createIcons();
+        return;
+    }
+
+    if (_empViewMode === 'card') {
+        grid.className = 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4';
+        grid.innerHTML = '';
+        rows.forEach(r => {
+            const score      = r.summary?.productivity_score ?? null;
+            const activeTime = r.summary !== null ? (r.summary.total_active_time + r.summary.total_idle_time) : null;
+            const initial    = (r.alias || r.user)[0].toUpperCase();
+            const statusColors = { available: 'bg-emerald-400', away: 'bg-amber-400', offline: 'bg-slate-300' };
+            const card = document.createElement('div');
+            card.className = 'bg-white rounded-2xl border border-slate-200 p-5 shadow-sm cursor-pointer hover:border-indigo-300 hover:shadow-md transition-all';
+            card.innerHTML = `
+                <div class="flex items-center gap-3 mb-4">
+                    <div class="relative shrink-0">
+                        <div class="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold text-base">${initial}</div>
+                        <span class="absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-white ${statusColors[r.status] || 'bg-slate-300'}"></span>
+                    </div>
+                    <div class="min-w-0 flex-1">
+                        <p class="font-semibold text-slate-800 truncate">${r.alias}</p>
+                        ${r.alias !== r.user ? `<p class="text-xs text-slate-400 truncate">${r.user}</p>` : ''}
+                    </div>
+                    <button onclick="event.stopPropagation();openActionMenu(this,[
+                        {icon:'user',label:'View Profile',action:()=>selectUser('${r.user}')},
+                        ...(window._isAdmin?[{icon:'download',label:'Export Data',action:()=>openExportModal('employee','${r.user}')}]:[])
+                    ])" class="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-all shrink-0">
+                        <i data-lucide="more-vertical" class="w-4 h-4"></i>
+                    </button>
+                </div>
+                <div class="space-y-2">
+                    <div class="flex items-center justify-between text-xs text-slate-500">
+                        <span>Productivity</span>
+                        <span class="font-semibold ${score !== null ? (score >= 60 ? 'text-emerald-600' : 'text-rose-500') : 'text-slate-300'}">${score !== null ? score + '%' : '—'}</span>
+                    </div>
+                    ${score !== null ? `<div class="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden"><div class="h-full rounded-full ${score >= 60 ? 'bg-emerald-500' : 'bg-rose-400'}" style="width:${score}%"></div></div>` : ''}
+                    <div class="flex items-center justify-between text-xs text-slate-500">
+                        <span>Active time</span>
+                        <span class="font-medium text-slate-700">${activeTime !== null ? formatDuration(activeTime) : '—'}</span>
+                    </div>
+                </div>`;
+            card.onclick = () => selectUser(r.user);
+            grid.appendChild(card);
+        });
+    } else {
+        // Row / list view
+        grid.className = 'bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden';
+        grid.innerHTML = `
+            <table class="w-full text-sm">
+                <thead class="bg-slate-50 text-slate-500 uppercase text-xs font-semibold">
+                    <tr>
+                        <th class="px-6 py-3 text-left">Employee</th>
+                        <th class="px-6 py-3 text-center">Status</th>
+                        <th class="px-6 py-3 text-center">Productivity</th>
+                        <th class="px-6 py-3 text-center">Active Time</th>
+                        <th class="px-6 py-3 w-12"></th>
+                    </tr>
+                </thead>
+                <tbody id="empTableBody" class="divide-y divide-slate-100"></tbody>
+            </table>`;
+        const tbody = grid.querySelector('#empTableBody');
+        rows.forEach(r => {
+            const score      = r.summary?.productivity_score ?? null;
+            const activeTime = r.summary !== null ? (r.summary.total_active_time + r.summary.total_idle_time) : null;
+            const initial    = (r.alias || r.user)[0].toUpperCase();
+            const statusColors = { available: 'bg-emerald-400', away: 'bg-amber-400', offline: 'bg-slate-300' };
+            const tr = document.createElement('tr');
+            tr.className = 'hover:bg-slate-50 transition-colors cursor-pointer';
+            tr.onclick   = () => selectUser(r.user);
+            tr.innerHTML = `
+                <td class="px-6 py-4">
+                    <div class="flex items-center gap-3">
+                        <div class="relative shrink-0">
+                            <div class="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold text-sm">${initial}</div>
+                            <span class="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-white ${statusColors[r.status] || 'bg-slate-300'}"></span>
+                        </div>
+                        <div>
+                            <p class="font-medium text-slate-800">${r.alias}</p>
+                            ${r.alias !== r.user ? `<p class="text-xs text-slate-400">${r.user}</p>` : ''}
+                        </div>
+                    </div>
+                </td>
+                <td class="px-6 py-4 text-center">${statusBadge(r.status)}</td>
+                <td class="px-6 py-4 text-center">
+                    ${score !== null ? `
+                        <div class="flex items-center justify-center gap-2">
+                            <div class="w-20 bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                                <div class="h-full rounded-full ${score >= 60 ? 'bg-emerald-500' : 'bg-rose-400'}" style="width:${score}%"></div>
+                            </div>
+                            <span class="font-semibold text-slate-700 tabular-nums">${score}%</span>
+                        </div>` : '<span class="text-slate-300">—</span>'}
+                </td>
+                <td class="px-6 py-4 text-center text-slate-500">${activeTime !== null ? formatDuration(activeTime) : '—'}</td>
+                <td class="px-6 py-4 text-right">
+                    <button onclick="event.stopPropagation();openActionMenu(this,[
+                        {icon:'user',label:'View Profile',action:()=>selectUser('${r.user}')},
+                        ...(window._isAdmin?[{icon:'download',label:'Export Data',action:()=>openExportModal('employee','${r.user}')}]:[])
+                    ])" class="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-all">
+                        <i data-lucide="more-vertical" class="w-4 h-4"></i>
+                    </button>
+                </td>`;
+            tbody.appendChild(tr);
+        });
+    }
+    lucide.createIcons({ nodes: [...grid.querySelectorAll('[data-lucide]')] });
+}
+
 // ── User detail ───────────────────────────────────────────────────────────────────
-let categoryChart = null, appChart = null;
+let categoryChart = null, appChart = null, peakChart = null;
 
 async function selectUser(userId) {
     _currentUserId = userId;
@@ -1052,7 +1621,7 @@ async function selectUser(userId) {
     document.querySelectorAll('.sidebar-user').forEach(el => {
         el.classList.toggle('active', el.dataset.username === userId);
     });
-    document.getElementById('userName').textContent = userId;
+    document.getElementById('userName').textContent = aliasFor(userId);
     await loadUserData();
 }
 
@@ -1070,15 +1639,29 @@ async function loadUserData() {
         const timeline = tlRes.ok ? await tlRes.json() : [];
         const { status, since } = computeStatus(timeline);
         document.getElementById('kpiStatusBadge').innerHTML = statusBadge(status, true);
-        if (since) {
-            const minsAgo = Math.round((Date.now() - since.getTime()) / 60000);
-            const label   = status === 'available' ? 'Active' : status === 'away' ? 'Idle since' : 'Last seen';
-            document.getElementById('kpiStatusSince').textContent =
-                minsAgo < 1  ? `${label} just now` :
-                minsAgo < 60 ? `${label} ${minsAgo}m ago` :
-                               `${label} ${Math.round(minsAgo/60)}h ago`;
+        const formatSince = (ts, label) => {
+            const minsAgo = Math.round((Date.now() - ts.getTime()) / 60000);
+            return minsAgo < 1    ? `${label} just now` :
+                   minsAgo < 60   ? `${label} ${minsAgo}m ago` :
+                   minsAgo < 1440 ? `${label} ${Math.round(minsAgo/60)}h ago` :
+                                    `${label} ${Math.round(minsAgo/1440)}d ago`;
+        };
+        if (status === 'available') {
+            document.getElementById('kpiStatusSince').textContent = '';
+        } else if (since) {
+            const label = status === 'away' ? 'Idle since' : 'Last seen';
+            document.getElementById('kpiStatusSince').textContent = formatSince(since, label);
         } else {
-            document.getElementById('kpiStatusSince').textContent = 'No data today';
+            // No events for selected date — fall back to last_seen stored in UserIndex
+            const rawLastSeen = _employeeLastSeen[_currentUserId];
+            if (rawLastSeen) {
+                const normTs  = rawLastSeen.replace(/[+-]\d{2}:\d{2}$/, 'Z');
+                const lsTime  = new Date(normTs);
+                document.getElementById('kpiStatusSince').textContent =
+                    isNaN(lsTime) ? 'Last seen unknown' : formatSince(lsTime, 'Last seen');
+            } else {
+                document.getElementById('kpiStatusSince').textContent = 'No data';
+            }
         }
 
         // Summary KPIs
@@ -1096,7 +1679,7 @@ async function loadUserData() {
 
         if (appsRes.ok) {
             const apps = await appsRes.json();
-            updateCharts(apps);
+            updateCharts(apps, timeline);
             updateTable(apps);
         }
     } catch (e) { if (e.message !== 'Session expired') console.error(e); }
@@ -1109,12 +1692,21 @@ function barColor(cat, alpha = 0.8) {
     return `rgba(99, 102, 241, ${alpha})`;                               // indigo fallback
 }
 
-function updateCharts(apps) {
+function updateCharts(apps, timeline) {
     // ── Doughnut: Productive vs Unproductive ─────────────────────────────────
+    // For browser apps use per-tab categories (accurate per-domain split).
+    // For non-browser apps use the app-level category.
     const cats = { Productive: 0, Unproductive: 0 };
     apps.forEach(a => {
-        if (a.category in cats) cats[a.category] += a.time;
-        else cats['Productive'] += a.time; // fallback
+        if (a.tabs && a.tabs.length > 0) {
+            a.tabs.forEach(t => {
+                const bucket = t.category in cats ? t.category : 'Productive';
+                cats[bucket] += t.time;
+            });
+        } else {
+            const bucket = a.category in cats ? a.category : 'Productive';
+            cats[bucket] += a.time;
+        }
     });
 
     const ctxC = document.getElementById('categoryChart').getContext('2d');
@@ -1185,6 +1777,118 @@ function updateCharts(apps) {
                 y: {
                     grid:  { display: false },
                     ticks: { font: { size: 11 } }
+                }
+            }
+        }
+    });
+
+    // ── Peak hours bar chart ──────────────────────────────────────────────────
+    if (timeline) updatePeakChart(computeHourlyActivity(timeline));
+}
+
+function computeHourlyActivity(timeline) {
+    const hours = new Array(24).fill(0);
+    timeline.forEach(ev => {
+        if (!ev.active || ev.locked) return;
+        // last_timestamp = end of the merged run; timestamp = start of first 60s window
+        const endRaw = (ev.last_timestamp || ev.timestamp).replace(/[+-]\d{2}:\d{2}$/, 'Z');
+        const endMs  = new Date(endRaw).getTime();
+        if (isNaN(endMs)) return;
+        const startMs = endMs - ev.duration * 1000;
+        // Distribute duration seconds across clock hours
+        let cur = startMs;
+        while (cur < endMs) {
+            const d       = new Date(cur);
+            const hour    = d.getHours();
+            const nextHMs = new Date(d.getFullYear(), d.getMonth(), d.getDate(), hour + 1).getTime();
+            const sliceMs = Math.min(endMs, nextHMs) - cur;
+            hours[hour]  += sliceMs / 1000;
+            cur = nextHMs;
+        }
+    });
+    return hours;
+}
+
+function updatePeakChart(hours) {
+    const labels = hours.map((_, h) => {
+        if (h === 0)  return '12AM';
+        if (h === 12) return '12PM';
+        return h < 12 ? `${h}AM` : `${h - 12}PM`;
+    });
+    const data = hours.map(v => Math.round(v / 60)); // convert to minutes
+
+    const ctxP = document.getElementById('peakChart').getContext('2d');
+    if (peakChart) peakChart.destroy();
+
+    // Gradient fill: deep indigo at top fading to transparent at bottom
+    const gradient = ctxP.createLinearGradient(0, 0, 0, ctxP.canvas.clientHeight || 220);
+    gradient.addColorStop(0,   'rgba(99, 102, 241, 0.35)');
+    gradient.addColorStop(0.6, 'rgba(99, 102, 241, 0.08)');
+    gradient.addColorStop(1,   'rgba(99, 102, 241, 0)');
+
+    peakChart = new Chart(ctxP, {
+        type: 'line',
+        data: {
+            labels,
+            datasets: [{
+                data,
+                fill:            true,
+                backgroundColor: gradient,
+                borderColor:     'rgba(99, 102, 241, 0.9)',
+                borderWidth:     2.5,
+                pointRadius:     data.map(v => v > 0 ? 3 : 0),
+                pointHoverRadius: 5,
+                pointBackgroundColor: 'rgba(99, 102, 241, 1)',
+                pointBorderColor:     '#fff',
+                pointBorderWidth:     2,
+                tension:         0.4,   // smooth bezier curve
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    backgroundColor: '#1e293b',
+                    padding:         10,
+                    titleColor:      '#94a3b8',
+                    bodyColor:       '#f1f5f9',
+                    callbacks: {
+                        title: (items) => `${items[0].label}`,
+                        label: (ctx) => {
+                            const mins = ctx.raw;
+                            if (mins === 0) return '  No activity';
+                            return mins >= 60
+                                ? `  ${Math.floor(mins/60)}h ${mins % 60}m active`
+                                : `  ${mins}m active`;
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    grid:  { display: false },
+                    border: { display: false },
+                    ticks: {
+                        font:        { size: 10 },
+                        color:       '#94a3b8',
+                        maxRotation: 0,
+                        // Show every 3 hours to avoid crowding
+                        callback: (_, i) => i % 3 === 0 ? labels[i] : '',
+                    }
+                },
+                y: {
+                    grid:   { color: '#f1f5f9' },
+                    border: { display: false },
+                    ticks: {
+                        callback:     (v) => v === 0 ? '' : v >= 60 ? `${Math.floor(v/60)}h` : `${v}m`,
+                        font:         { size: 10 },
+                        color:        '#94a3b8',
+                        maxTicksLimit: 5,
+                    },
+                    min: 0
                 }
             }
         }
@@ -1277,6 +1981,9 @@ async function loadGroupData() {
         document.getElementById('groupStatMembers').textContent = members.length;
         document.getElementById('groupStatActive').textContent  = activeCount;
         document.getElementById('groupStatScore').textContent   = scored.length ? `${avgScore}%` : '—';
+        const totalActiveSeconds = scored.reduce((s, m) => s + (m.summary?.total_active_time || 0), 0);
+        const avgActiveHours = scored.length ? (totalActiveSeconds / scored.length / 3600).toFixed(1) : '—';
+        document.getElementById('groupStatAvgHours').textContent = scored.length ? `${avgActiveHours}h` : '—';
 
         // Sort: available → away → offline, then by score desc
         const order = { available: 0, away: 1, offline: 2 };
@@ -1291,14 +1998,19 @@ async function loadGroupData() {
 
         rows.forEach(r => {
             const score      = r.summary?.productivity_score ?? null;
-            const activeTime = r.summary?.total_active_time  ?? null;
+            const activeTime = r.summary !== null ? (r.summary.total_active_time + r.summary.total_idle_time) : null;
+            const displayName = aliasFor(r.username);
+            const initial    = displayName[0].toUpperCase();
             const tr = document.createElement('tr');
             tr.className = 'hover:bg-slate-50 transition-colors';
             tr.innerHTML = `
                 <td class="px-6 py-4 cursor-pointer" onclick="selectUser('${r.username}')">
                     <div class="flex items-center gap-3">
-                        <div class="w-8 h-8 rounded-full bg-purple-100 flex items-center justify-center text-purple-600 font-bold text-sm shrink-0">${r.username[0].toUpperCase()}</div>
-                        <span class="font-medium text-slate-800 hover:text-indigo-600">${r.username}</span>
+                        <div class="w-8 h-8 rounded-full bg-purple-100 flex items-center justify-center text-purple-600 font-bold text-sm shrink-0">${initial}</div>
+                        <div>
+                            <p class="font-medium text-slate-800 hover:text-indigo-600">${displayName}</p>
+                            ${displayName !== r.username ? `<p class="text-xs text-slate-400">${r.username}</p>` : ''}
+                        </div>
                     </div>
                 </td>
                 <td class="px-6 py-4 text-center">
@@ -1313,10 +2025,14 @@ async function loadGroupData() {
                 <td class="px-6 py-4 text-center text-sm text-slate-500">${activeTime !== null ? formatDuration(activeTime) : '—'}</td>
                 <td class="px-6 py-4 text-center">${statusBadge(r.status)}</td>
                 <td class="px-6 py-4 text-right">
-                    ${isAdmin ? `
-                    <button onclick="removeMemberFromGroup('${r.username}')"
-                            class="text-xs text-rose-500 hover:text-rose-700 font-semibold px-2 py-1 rounded-lg hover:bg-rose-50 transition-all">Remove</button>
-                    ` : ''}
+                    <button onclick="event.stopPropagation();openActionMenu(this,[
+                        {icon:'user',label:'View Profile',action:()=>selectUser('${r.username}')},
+                        ${isAdmin ? `{icon:'download',label:'Export Data',action:()=>openExportModal('employee','${r.username}')},
+                        {divider:true},
+                        {icon:'user-minus',label:'Remove from Group',danger:true,action:()=>removeMemberFromGroup('${r.username}')}` : ''}
+                    ])" class="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-all">
+                        <i data-lucide="more-vertical" class="w-4 h-4"></i>
+                    </button>
                 </td>`;
             tbody.appendChild(tr);
         });
@@ -1524,6 +2240,120 @@ async function submitDeleteGroup() {
     } catch (ex) { err.textContent = ex.message; err.classList.remove('hidden'); }
 }
 
+// ── Settings page ─────────────────────────────────────────────────────────────────
+function loadSettings() {
+    const employees = _allEmployees;
+    // Rename
+    const renSel = document.getElementById('stRenameEmployee');
+    renSel.innerHTML = '<option value="">— select employee —</option>';
+    employees.forEach(u => renSel.add(new Option(u, u)));
+    document.getElementById('stRenameNewName').value = '';
+    stMsgClear('stRenameMsg');
+    // Merge
+    const mergeSrc = document.getElementById('stMergeSource');
+    mergeSrc.innerHTML = '<option value="">— select source —</option>';
+    employees.forEach(u => mergeSrc.add(new Option(u, u)));
+    stSyncMergeTargets();
+    stMsgClear('stMergeMsg');
+    // Delete
+    const delSel = document.getElementById('stDeleteEmployee');
+    delSel.innerHTML = '<option value="">— select employee —</option>';
+    employees.forEach(u => delSel.add(new Option(u, u)));
+    document.getElementById('stDeleteConfirm').value = '';
+    document.getElementById('stDeleteConfirm').placeholder = '';
+    stMsgClear('stDeleteMsg');
+}
+
+function stSyncMergeTargets() {
+    const src    = document.getElementById('stMergeSource').value;
+    const tgtSel = document.getElementById('stMergeTarget');
+    tgtSel.innerHTML = '<option value="">— select target —</option>';
+    _allEmployees.filter(u => u !== src).forEach(u => tgtSel.add(new Option(u, u)));
+}
+
+function stSyncDeleteConfirm() {
+    const u = document.getElementById('stDeleteEmployee').value;
+    document.getElementById('stDeleteConfirm').placeholder = u ? `Type "${u}" to confirm` : '';
+    document.getElementById('stDeleteConfirm').value = '';
+}
+
+function stMsgShow(id, text, isError) {
+    const el = document.getElementById(id);
+    el.textContent = text;
+    el.className = `mt-3 text-xs px-3 py-2 rounded-lg ${isError ? 'text-rose-700 bg-rose-50' : 'text-emerald-700 bg-emerald-50'}`;
+    el.classList.remove('hidden');
+}
+function stMsgClear(id) { document.getElementById(id).classList.add('hidden'); }
+
+async function settingsRename() {
+    const btn      = document.getElementById('stRenameBtn');
+    const username = document.getElementById('stRenameEmployee').value;
+    const newAlias = document.getElementById('stRenameNewName').value.trim();
+    stMsgClear('stRenameMsg');
+    if (!username)  return stMsgShow('stRenameMsg', 'Select an employee first.', true);
+    if (!newAlias)  return stMsgShow('stRenameMsg', 'Enter a display name.', true);
+    btn.disabled = true; btn.textContent = 'Saving...';
+    try {
+        const res = await apiFetch(`${API_BASE}/user/rename`, {
+            method: 'PUT', body: JSON.stringify({ old_name: username, new_name: newAlias }),
+        });
+        if (!res.ok) { const d = await res.json().catch(()=>({})); throw new Error(d.detail || 'Failed'); }
+        // Update alias map locally; underlying username doesn't change
+        _employeeAliases[username] = newAlias;
+        if (_currentUserId === username) document.getElementById('userName').textContent = newAlias;
+        await fetchSidebarUsers();
+        if (_activeView === 'home') loadOverview();
+        loadSettings();
+        stMsgShow('stRenameMsg', `Display name for "${username}" set to "${newAlias}".`, false);
+    } catch (ex) { stMsgShow('stRenameMsg', ex.message, true); }
+    finally { btn.disabled = false; btn.textContent = 'Save'; }
+}
+
+async function settingsMerge() {
+    const btn = document.getElementById('stMergeBtn');
+    const src = document.getElementById('stMergeSource').value;
+    const tgt = document.getElementById('stMergeTarget').value;
+    stMsgClear('stMergeMsg');
+    if (!src) return stMsgShow('stMergeMsg', 'Select a source employee.', true);
+    if (!tgt) return stMsgShow('stMergeMsg', 'Select a target employee.', true);
+    btn.disabled = true; btn.textContent = 'Merging...';
+    try {
+        const res = await apiFetch(`${API_BASE}/user/merge`, {
+            method: 'POST', body: JSON.stringify({ source: src, target: tgt }),
+        });
+        if (!res.ok) { const d = await res.json().catch(()=>({})); throw new Error(d.detail || 'Merge failed'); }
+        const data = await res.json();
+        if (_currentUserId === src) { _currentUserId = tgt; document.getElementById('userName').textContent = tgt; }
+        await fetchSidebarUsers();
+        if (_activeView === 'home') loadOverview();
+        else if (_currentUserId === tgt) loadUserData();
+        loadSettings();
+        stMsgShow('stMergeMsg', `Merged "${src}" into "${tgt}". ${data.migrated} events moved.`, false);
+    } catch (ex) { stMsgShow('stMergeMsg', ex.message, true); }
+    finally { btn.disabled = false; btn.textContent = 'Merge & Delete Source'; }
+}
+
+async function settingsDelete() {
+    const btn   = document.getElementById('stDeleteBtn');
+    const u     = document.getElementById('stDeleteEmployee').value;
+    const typed = document.getElementById('stDeleteConfirm').value.trim();
+    stMsgClear('stDeleteMsg');
+    if (!u)          return stMsgShow('stDeleteMsg', 'Select an employee first.', true);
+    if (typed !== u) return stMsgShow('stDeleteMsg', `Type "${u}" exactly to confirm deletion.`, true);
+    btn.disabled = true; btn.textContent = 'Deleting...';
+    try {
+        const res = await apiFetch(`${API_BASE}/user?user=${encodeURIComponent(u)}`, { method: 'DELETE' });
+        if (!res.ok) { const d = await res.json().catch(()=>({})); throw new Error(d.detail || 'Delete failed'); }
+        const data = await res.json();
+        if (_currentUserId === u) { _currentUserId = null; }
+        await fetchSidebarUsers();
+        if (_activeView === 'home') loadOverview();
+        loadSettings();
+        stMsgShow('stDeleteMsg', `Deleted "${u}". ${data.deleted_events} events removed.`, false);
+    } catch (ex) { stMsgShow('stDeleteMsg', ex.message, true); }
+    finally { btn.disabled = false; btn.textContent = 'Delete'; }
+}
+
 // ── Rename Employee ───────────────────────────────────────────────────────────────
 let renameTarget = '';
 
@@ -1531,7 +2361,7 @@ function openRenameModal(username) {
     if (!username) return;
     renameTarget = username;
     document.getElementById('renameOldName').textContent = username;
-    document.getElementById('renameNewName').value = username;
+    document.getElementById('renameNewName').value = aliasFor(username);
     document.getElementById('renameError').classList.add('hidden');
     document.getElementById('renameSaveBtn').disabled = false;
     document.getElementById('renameSaveBtn').textContent = 'Rename';
@@ -1543,43 +2373,219 @@ function closeRenameModal() { document.getElementById('renameModal').classList.a
 
 async function submitRename(e) {
     e.preventDefault();
-    const err    = document.getElementById('renameError');
-    const btn    = document.getElementById('renameSaveBtn');
-    const newName = document.getElementById('renameNewName').value.trim().toLowerCase();
+    const err      = document.getElementById('renameError');
+    const btn      = document.getElementById('renameSaveBtn');
+    const newAlias = document.getElementById('renameNewName').value.trim();
     err.classList.add('hidden');
-    if (!newName) return;
-    if (newName === renameTarget.toLowerCase()) { closeRenameModal(); return; }
+    if (!newAlias) return;
 
-    btn.disabled = true; btn.textContent = 'Renaming...';
+    btn.disabled = true; btn.textContent = 'Saving...';
     try {
         const res = await apiFetch(`${API_BASE}/user/rename`, {
             method: 'PUT',
-            body: JSON.stringify({ old_name: renameTarget, new_name: newName }),
+            body: JSON.stringify({ old_name: renameTarget, new_name: newAlias }),
         });
-        if (!res.ok) { const d = await res.json().catch(()=>({})); throw new Error(d.detail || 'Rename failed'); }
-        const data = await res.json();
+        if (!res.ok) { const d = await res.json().catch(()=>({})); throw new Error(d.detail || 'Failed'); }
         closeRenameModal();
 
-        // If we were viewing this user's detail, update the current user reference
+        // Update alias in memory; underlying username (_currentUserId) stays the same
+        _employeeAliases[renameTarget] = newAlias;
         if (_currentUserId === renameTarget) {
-            _currentUserId = newName;
-            document.getElementById('userName').textContent = newName;
+            document.getElementById('userName').textContent = newAlias;
         }
         renameTarget = '';
-        // Refresh sidebar and overview
         await fetchSidebarUsers();
         if (_activeView === 'home') loadOverview();
-        alert(`Renamed successfully. ${data.migrated} events migrated.`);
     } catch (ex) {
         err.textContent = ex.message;
         err.classList.remove('hidden');
     } finally {
-        btn.disabled = false; btn.textContent = 'Rename';
+        btn.disabled = false; btn.textContent = 'Save';
+    }
+}
+
+// ── Export ────────────────────────────────────────────────────────────────────────
+let _exportScope = 'all'; // 'all' | group_id
+
+function openExportModal(scope, employeeUser) {
+    _exportScope = scope;
+    document.getElementById('exportDate').value = getTodayDate();
+    document.getElementById('exportError').classList.add('hidden');
+    document.getElementById('exportProgress').classList.add('hidden');
+
+    // Populate scope select
+    const sel = document.getElementById('exportScope');
+    sel.innerHTML = '<option value="all">All Employees</option>';
+    if (scope === 'employee' && employeeUser) {
+        sel.innerHTML = '';
+        const alias = aliasFor(employeeUser);
+        const opt = document.createElement('option');
+        opt.value = employeeUser;
+        opt.textContent = alias !== employeeUser ? `${alias} (${employeeUser})` : employeeUser;
+        opt.selected = true;
+        sel.appendChild(opt);
+    }
+    if (scope === 'group' && _currentGroupId) {
+        const g = _allGroups.find(x => x.id === _currentGroupId);
+        const opt = document.createElement('option');
+        opt.value = _currentGroupId;
+        opt.textContent = g ? g.name : _currentGroupId;
+        opt.selected = true;
+        sel.appendChild(opt);
+    }
+    if (scope !== 'employee') {
+        _allGroups.forEach(g => {
+            if (g.id !== _currentGroupId) {
+                const opt = document.createElement('option');
+                opt.value = g.id;
+                opt.textContent = g.name;
+                sel.appendChild(opt);
+            }
+        });
+    }
+
+    document.getElementById('exportModal').classList.remove('hidden');
+}
+
+function closeExportModal() {
+    document.getElementById('exportModal').classList.add('hidden');
+}
+
+async function submitExport() {
+    const date   = document.getElementById('exportDate').value;
+    const scope  = document.getElementById('exportScope').value;
+    const sheets = {
+        summary:       document.getElementById('exportSheetSummary').checked,
+        apps:          document.getElementById('exportSheetApps').checked,
+        productive:    document.getElementById('exportSheetProductive').checked,
+        unproductive:  document.getElementById('exportSheetUnproductive').checked,
+        timeline:      document.getElementById('exportSheetTimeline').checked,
+    };
+    if (!date) { document.getElementById('exportError').textContent = 'Select a date.'; document.getElementById('exportError').classList.remove('hidden'); return; }
+
+    const btn = document.getElementById('exportSubmitBtn');
+    btn.disabled = true;
+    document.getElementById('exportError').classList.add('hidden');
+    document.getElementById('exportProgress').classList.remove('hidden');
+
+    try {
+        // Determine which employees to export
+        let employees = [];
+        if (scope === 'all') {
+            const r = await apiFetch(`${API_BASE}/users`);
+            employees = await r.json();
+        } else if (_allGroups.find(g => g.id === scope)) {
+            // It's a group ID
+            const r = await apiFetch(`${API_BASE}/groups/${scope}/summary?date=${date}`);
+            const d = await r.json();
+            employees = (d.members || []).map(m => ({ user: m.username, alias: aliasFor(m.username) }));
+        } else {
+            // Single employee by username
+            employees = [{ user: scope, alias: aliasFor(scope) }];
+        }
+
+        document.getElementById('exportProgressText').textContent = `Fetching data for ${employees.length} employees...`;
+
+        // Fetch all data
+        const allData = await Promise.all(employees.map(async (u) => {
+            try {
+                const [sumRes, appsRes, tlRes] = await Promise.all([
+                    apiFetch(`${API_BASE}/user-summary?user=${u.user}&date=${date}`),
+                    apiFetch(`${API_BASE}/user-apps?user=${u.user}&date=${date}`),
+                    apiFetch(`${API_BASE}/user-timeline?user=${u.user}&date=${date}`),
+                ]);
+                return {
+                    user:     u.user,
+                    alias:    u.alias || u.user,
+                    summary:  sumRes.ok  ? await sumRes.json()  : null,
+                    apps:     appsRes.ok ? await appsRes.json() : [],
+                    timeline: tlRes.ok   ? await tlRes.json()   : [],
+                };
+            } catch { return { user: u.user, alias: u.alias || u.user, summary: null, apps: [], timeline: [] }; }
+        }));
+
+        document.getElementById('exportProgressText').textContent = 'Building workbook...';
+
+        const wb = XLSX.utils.book_new();
+        const fmtSecs = s => s ? `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m` : '—';
+
+        if (sheets.summary) {
+            const rows = [['Employee', 'Username', 'Date', 'Productivity Score', 'Active Time', 'Idle Time', 'Screen Off Time', 'Top App']];
+            allData.forEach(d => {
+                rows.push([
+                    d.alias, d.user, date,
+                    d.summary ? d.summary.productivity_score + '%' : '—',
+                    d.summary ? fmtSecs(d.summary.total_active_time) : '—',
+                    d.summary ? fmtSecs(d.summary.total_idle_time) : '—',
+                    d.summary ? fmtSecs(d.summary.total_screen_off_time) : '—',
+                    d.summary ? d.summary.top_app : '—',
+                ]);
+            });
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Summary');
+        }
+
+        if (sheets.apps) {
+            const rows = [['Employee', 'Username', 'Date', 'Application', 'Category', 'Time Spent', 'Time (seconds)']];
+            allData.forEach(d => {
+                d.apps.forEach(a => {
+                    rows.push([d.alias, d.user, date, a.app, a.category, fmtSecs(a.time), a.time]);
+                });
+            });
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'All App Usage');
+        }
+
+        if (sheets.productive) {
+            const rows = [['Employee', 'Username', 'Date', 'Application', 'Time Spent', 'Time (seconds)']];
+            allData.forEach(d => {
+                d.apps.filter(a => a.category === 'Productive').forEach(a => {
+                    rows.push([d.alias, d.user, date, a.app, fmtSecs(a.time), a.time]);
+                });
+            });
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Productive Apps');
+        }
+
+        if (sheets.unproductive) {
+            const rows = [['Employee', 'Username', 'Date', 'Application', 'Time Spent', 'Time (seconds)']];
+            allData.forEach(d => {
+                d.apps.filter(a => a.category === 'Unproductive').forEach(a => {
+                    rows.push([d.alias, d.user, date, a.app, fmtSecs(a.time), a.time]);
+                });
+            });
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Unproductive Apps');
+        }
+
+        if (sheets.timeline) {
+            const rows = [['Employee', 'Username', 'Date', 'Hour', 'Active Minutes']];
+            allData.forEach(d => {
+                const hourly = computeHourlyActivity(d.timeline);
+                hourly.forEach((secs, h) => {
+                    const label = h === 0 ? '12AM' : h === 12 ? '12PM' : h < 12 ? `${h}AM` : `${h-12}PM`;
+                    rows.push([d.alias, d.user, date, label, Math.round(secs / 60)]);
+                });
+            });
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Hourly Timeline');
+        }
+
+        if (wb.SheetNames.length === 0) {
+            document.getElementById('exportError').textContent = 'Select at least one sheet to include.';
+            document.getElementById('exportError').classList.remove('hidden');
+            return;
+        }
+
+        const filename = `productivity_${scope === 'all' ? 'all' : (_allGroups.find(g=>g.id===scope)?.name || scope).replace(/\s+/g,'_')}_${date}.xlsx`;
+        XLSX.writeFile(wb, filename);
+        closeExportModal();
+    } catch (e) {
+        document.getElementById('exportError').textContent = e.message || 'Export failed';
+        document.getElementById('exportError').classList.remove('hidden');
+    } finally {
+        btn.disabled = false;
+        document.getElementById('exportProgress').classList.add('hidden');
     }
 }
 
 // Close modals on backdrop click
-['addUserModal','changePwModal','deleteModal','renameModal','createGroupModal','addMemberModal','deleteGroupModal'].forEach(id => {
+['addUserModal','changePwModal','deleteModal','renameModal','createGroupModal','addMemberModal','deleteGroupModal','exportModal'].forEach(id => {
     document.getElementById(id).addEventListener('click', e => {
         if (e.target === e.currentTarget) e.currentTarget.classList.add('hidden');
     });

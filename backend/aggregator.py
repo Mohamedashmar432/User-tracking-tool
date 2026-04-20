@@ -161,6 +161,27 @@ UNPRODUCTIVE_DOMAINS: set = {
     "web.whatsapp.com", "web.telegram.org",
 }
 
+# ── Unproductive tab-title keywords ──────────────────────────────────────────────
+# The agent's extract_domain() returns the window TITLE (e.g. "Never Gonna Give
+# You Up - YouTube"), not the URL.  UNPRODUCTIVE_DOMAINS only catches exact-domain
+# strings like "youtube.com".  These shorter keywords catch unproductive sites via
+# their name as it appears in the page/tab title.
+UNPRODUCTIVE_TITLE_KEYWORDS: set = {
+    "youtube", "youtu.be",
+    "netflix", "prime video", "amazon prime video",
+    "hulu", "disney+", "disneyplus", "hbo max", "hbomax", "paramount+",
+    "twitch", "crunchyroll", "funimation",
+    "instagram", "facebook",
+    "twitter", " x.com",
+    "tiktok", "snapchat",
+    "pinterest", "tumblr",
+    "reddit", "9gag", "imgur",
+    "buzzfeed", "tmz", "daily mail",
+    "espn", "bleacher report",
+    "steam store", "epic games store",
+    "whatsapp", "telegram",
+}
+
 
 # ── Core categorisation ─────────────────────────────────────────────────────────
 
@@ -186,6 +207,10 @@ def categorize(app: str, domain: str) -> str:
     if domain_l:
         if any(k in domain_l for k in UNPRODUCTIVE_DOMAINS):
             return "Unproductive"
+        # Tab titles (e.g. "Never Gonna Give You Up - YouTube") won't match
+        # domain strings like "youtube.com", so check title keywords too.
+        if any(k in domain_l for k in UNPRODUCTIVE_TITLE_KEYWORDS):
+            return "Unproductive"
         if any(k in domain_l for k in PRODUCTIVE_DOMAINS):
             return "Productive"
 
@@ -205,20 +230,26 @@ def categorize(app: str, domain: str) -> str:
 def _merge_consecutive(events: List[Dict]) -> List[Dict]:
     """
     Collapse back-to-back entries sharing the same app AND active AND locked state.
-    Keeps the timestamp of the first event in each run.
+    Keeps the timestamp of the first event in each run; tracks the last event's
+    timestamp in `last_timestamp` so callers can determine recency correctly.
     """
     if not events:
         return []
 
-    merged = [dict(events[0])]
+    first = dict(events[0])
+    first["last_timestamp"] = first["timestamp"]
+    merged = [first]
     for ev in events[1:]:
         last = merged[-1]
         if (ev["app"]          == last["app"]
                 and ev["active"]   == last["active"]
                 and ev.get("locked", False) == last.get("locked", False)):
-            last["duration"] += ev["duration"]
+            last["duration"]       += ev["duration"]
+            last["last_timestamp"]  = ev["timestamp"]
         else:
-            merged.append(dict(ev))
+            new_ev = dict(ev)
+            new_ev["last_timestamp"] = ev["timestamp"]
+            merged.append(new_ev)
     return merged
 
 
@@ -330,11 +361,12 @@ def build_timeline(events: List[Dict]) -> List[Dict[str, Any]]:
     """
     return [
         {
-            "timestamp": ev["timestamp"],
-            "app":       ev["app"],
-            "active":    ev["active"],
-            "locked":    ev.get("locked", False),
-            "duration":  ev["duration"],
+            "timestamp":      ev["timestamp"],
+            "last_timestamp": ev.get("last_timestamp", ev["timestamp"]),
+            "app":            ev["app"],
+            "active":         ev["active"],
+            "locked":         ev.get("locked", False),
+            "duration":       ev["duration"],
         }
         for ev in _merge_consecutive(events)
     ]
