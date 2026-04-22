@@ -14,6 +14,7 @@ Categorisation philosophy (technical-worker defaults)
 - No "Neutral" category: every event is Productive or Unproductive.
 """
 
+from functools import lru_cache
 from typing import Any, Dict, List
 
 # ── Browser process names ────────────────────────────────────────────────────────
@@ -185,6 +186,7 @@ UNPRODUCTIVE_TITLE_KEYWORDS: set = {
 
 # ── Core categorisation ─────────────────────────────────────────────────────────
 
+@lru_cache(maxsize=2048)
 def categorize(app: str, domain: str) -> str:
     """
     Returns "Productive" or "Unproductive" — no Neutral category.
@@ -253,22 +255,9 @@ def _merge_consecutive(events: List[Dict]) -> List[Dict]:
     return merged
 
 
-# ── Public aggregation functions ────────────────────────────────────────────────
+# ── Internal aggregation helpers (operate on pre-merged events) ─────────────────
 
-def aggregate_summary(events: List[Dict]) -> Dict[str, Any]:
-    """
-    Compute the daily KPI card data from raw events.
-
-    Returns
-    -------
-    total_active_time      : int    seconds the user was active
-    total_idle_time        : int    seconds idle (screen on, no input)
-    total_screen_off_time  : int    seconds screen locked / away
-    productivity_score     : float  productive_secs / active_secs * 100
-    top_app                : str    app with the most active time
-    """
-    merged = _merge_consecutive(events)
-
+def _agg_summary(merged: List[Dict]) -> Dict[str, Any]:
     total_active    = 0
     total_idle      = 0
     total_locked    = 0
@@ -292,23 +281,15 @@ def aggregate_summary(events: List[Dict]) -> Dict[str, Any]:
     score   = (productive_secs / total_active * 100) if total_active else 0.0
 
     return {
-        "total_active_time":    total_active,
-        "total_idle_time":      total_idle,
+        "total_active_time":     total_active,
+        "total_idle_time":       total_idle,
         "total_screen_off_time": total_locked,
-        "productivity_score":   round(score, 1),
-        "top_app":              top_app,
+        "productivity_score":    round(score, 1),
+        "top_app":               top_app,
     }
 
 
-def aggregate_apps(events: List[Dict]) -> List[Dict[str, Any]]:
-    """
-    Per-app usage totals with category, sorted by time descending.
-    Idle events are excluded (we only count active app time).
-
-    For browser apps, includes a `tabs` field with per-domain breakdown.
-    """
-    merged = _merge_consecutive(events)
-
+def _agg_apps(merged: List[Dict], raw_events: List[Dict]) -> List[Dict[str, Any]]:
     app_data: Dict[str, Dict] = {}
     tab_data: Dict[str, Dict[str, int]] = {}
 
@@ -321,8 +302,8 @@ def aggregate_apps(events: List[Dict]) -> List[Dict[str, Any]]:
             app_data[app] = {"time": 0, "category": categorize(app, domain)}
         app_data[app]["time"] += ev["duration"]
 
-    # Build per-tab totals from raw (unmerged) events
-    for ev in events:
+    # Per-tab totals use raw events to preserve individual tab visits
+    for ev in raw_events:
         if not ev["active"]:
             continue
         app    = ev["app"]
@@ -351,14 +332,7 @@ def aggregate_apps(events: List[Dict]) -> List[Dict[str, Any]]:
     return sorted(result, key=lambda x: x["time"], reverse=True)
 
 
-def build_timeline(events: List[Dict]) -> List[Dict[str, Any]]:
-    """
-    Time-series for charting and status computation.
-    Consecutive same-state entries are merged.
-
-    Returns list of {"timestamp", "app", "active", "locked", "duration"}.
-    The `locked` field is required by the frontend `computeStatus()` function.
-    """
+def _build_timeline_from_merged(merged: List[Dict]) -> List[Dict[str, Any]]:
     return [
         {
             "timestamp":      ev["timestamp"],
@@ -368,5 +342,36 @@ def build_timeline(events: List[Dict]) -> List[Dict[str, Any]]:
             "locked":         ev.get("locked", False),
             "duration":       ev["duration"],
         }
-        for ev in _merge_consecutive(events)
+        for ev in merged
     ]
+
+
+# ── Public aggregation functions ────────────────────────────────────────────────
+
+def aggregate_all(events: List[Dict]) -> Dict[str, Any]:
+    """
+    Compute summary + apps + timeline in one pass — _merge_consecutive called once.
+    Use this instead of calling the three functions individually.
+    """
+    merged = _merge_consecutive(events)
+    return {
+        "summary":  _agg_summary(merged),
+        "apps":     _agg_apps(merged, events),
+        "timeline": _build_timeline_from_merged(merged),
+    }
+
+
+def aggregate_summary(events: List[Dict]) -> Dict[str, Any]:
+    """Daily KPI cards. Prefer aggregate_all() when apps+timeline are also needed."""
+    return _agg_summary(_merge_consecutive(events))
+
+
+def aggregate_apps(events: List[Dict]) -> List[Dict[str, Any]]:
+    """Per-app usage totals. Prefer aggregate_all() when summary+timeline are also needed."""
+    merged = _merge_consecutive(events)
+    return _agg_apps(merged, events)
+
+
+def build_timeline(events: List[Dict]) -> List[Dict[str, Any]]:
+    """Time-series for charting. Prefer aggregate_all() when summary+apps are also needed."""
+    return _build_timeline_from_merged(_merge_consecutive(events))

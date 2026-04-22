@@ -116,20 +116,170 @@ _cfg = _load_config()
 # ── Configuration ───────────────────────────────────────────────────────────────
 
 IDLE_THRESHOLD    = _cfg.get("idle_threshold",  300)  # seconds
+AGENT_VERSION     = "2.6"   # bump this before every EXE build
+
 TICK_INTERVAL     = _cfg.get("tick_interval",    5)   # seconds
-LOG_INTERVAL      = _cfg.get("log_interval",    60)   # seconds — one event per minute
+LOG_INTERVAL      = _cfg.get("log_interval",    30)   # seconds — 30s balances granularity vs storage cost
 BATCH_SIZE        = _cfg.get("batch_size",      10)   # safety cap: flush if buffer reaches this
-FLUSH_INTERVAL    = _cfg.get("flush_interval", 120)   # seconds between server pushes (primary trigger)
+FLUSH_INTERVAL    = _cfg.get("flush_interval",  60)   # seconds — 60s + flush-on-app-switch keeps lag < 60s
 MAX_BACKUP_EVENTS = 100   # max events persisted to disk when server is unreachable
 
-LOG_FILE      = "logs.txt"
+LOG_FILE      = os.path.join(tempfile.gettempdir(), "TelemetryAgent", "logs.txt")
 MAX_LOG_SIZE  = 10 * 1024 * 1024   # 10 MB
+
+# Local cache files — shared with the UI companion process
+CACHE_PATH  = os.path.join(PROGRAM_DATA, "cache.json")   # daily summary + top apps + hourly bars
+STATUS_PATH = os.path.join(PROGRAM_DATA, "status.json")  # current status, updated every tick (5s)
 
 # Resolution order: env var → config file → default
 INGEST_URL = os.getenv("INGEST_URL") or _cfg.get("ingest_url", "http://localhost:8000/ingest")
 AGENT_API_KEY = os.getenv("AGENT_API_KEY") or os.getenv("API_KEY") or _cfg.get("api_key", "")
 
 BROWSER_PROCESSES = {"chrome.exe", "msedge.exe", "firefox.exe", "brave.exe"}
+
+# ── Minimal local categorisation (mirrors aggregator.py, no import needed) ──────
+_UNPRODUCTIVE_DOMAINS = {
+    "youtube.com", "youtu.be", "netflix.com", "primevideo.com", "hulu.com",
+    "disneyplus.com", "twitch.tv", "instagram.com", "facebook.com",
+    "twitter.com", "x.com", "tiktok.com", "reddit.com", "9gag.com",
+    "amazon.com", "ebay.com", "buzzfeed.com", "espn.com",
+    "web.whatsapp.com", "web.telegram.org",
+}
+_UNPRODUCTIVE_TITLE_KW = {
+    "youtube", "netflix", "prime video", "hulu", "disney+", "twitch",
+    "instagram", "facebook", "twitter", " x.com", "tiktok", "reddit",
+    "buzzfeed", "espn", "whatsapp", "telegram",
+}
+_UNPRODUCTIVE_APPS = {
+    "steam.exe", "epicgameslauncher.exe", "spotify.exe", "vlc.exe",
+    "battle.net.exe", "leagueclient.exe", "valorant.exe",
+}
+
+
+def _local_categorize(app: str, domain: str) -> str:
+    """Lightweight version of aggregator.categorize() for local cache scoring."""
+    d = (domain or "").lower().strip()
+    if d.startswith("www."):
+        d = d[4:]
+    if d:
+        if any(k in d for k in _UNPRODUCTIVE_DOMAINS):
+            return "Unproductive"
+        if any(k in d for k in _UNPRODUCTIVE_TITLE_KW):
+            return "Unproductive"
+    a = (app or "").lower().strip()
+    if any(k in a for k in _UNPRODUCTIVE_APPS):
+        return "Unproductive"
+    return "Productive"
+
+
+# ── In-memory daily accumulators (reset at midnight) ────────────────────────────
+_acc_date:         str       = ""        # tracks current date; "" triggers first-run init
+_acc_active:       int       = 0         # total active seconds today
+_acc_idle:         int       = 0         # total idle seconds today
+_acc_locked:       int       = 0         # total screen-off seconds today
+_acc_productive:   int       = 0         # active seconds on productive apps
+_acc_app_times:    dict      = {}        # {app_name: seconds}
+_acc_hourly:       list      = [0] * 24  # active seconds per clock hour (local time)
+
+
+def _check_day_reset() -> None:
+    """Reset accumulators when the calendar date rolls over."""
+    global _acc_date, _acc_active, _acc_idle, _acc_locked
+    global _acc_productive, _acc_app_times, _acc_hourly
+    today = datetime.now(timezone.utc).date().isoformat()
+    if _acc_date == today:
+        return
+    _acc_date      = today
+    _acc_active    = 0
+    _acc_idle      = 0
+    _acc_locked    = 0
+    _acc_productive = 0
+    _acc_app_times = {}
+    _acc_hourly    = [0] * 24
+
+
+def _accumulate(app: str, domain: str, is_active: bool, is_locked: bool, duration: int) -> None:
+    """Update in-memory counters for one event interval."""
+    global _acc_active, _acc_idle, _acc_locked, _acc_productive
+    _check_day_reset()
+    if is_locked:
+        _acc_locked += duration
+    elif is_active:
+        _acc_active += duration
+        _acc_app_times[app] = _acc_app_times.get(app, 0) + duration
+        hour = datetime.now(timezone.utc).astimezone().hour  # local clock hour
+        _acc_hourly[hour] = min(_acc_hourly[hour] + duration, 3600)
+        if _local_categorize(app, domain) == "Productive":
+            _acc_productive += duration
+    else:
+        _acc_idle += duration
+
+
+def _write_status_file(app: str, active: bool, locked: bool, idle_secs: int) -> None:
+    """
+    Write current agent state to STATUS_PATH every tick (~5 s).
+    The UI reads this for the real-time status indicator (<5 s lag).
+    """
+    try:
+        os.makedirs(PROGRAM_DATA, exist_ok=True)
+        payload = {
+            "timestamp":   datetime.now(timezone.utc).isoformat(),
+            "app":         app,
+            "active":      active,
+            "locked":      locked,
+            "idle_seconds": idle_secs,
+        }
+        # Write to a temp file then rename — atomic on Windows
+        tmp = STATUS_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+        os.replace(tmp, STATUS_PATH)
+    except Exception:
+        pass  # non-fatal; UI falls back to server data
+
+
+def _write_cache(username: str, device: str) -> None:
+    """
+    Write daily summary + top-apps + hourly activity to CACHE_PATH
+    after every event interval (~15 s).  The UI companion reads this when
+    the server is unreachable or for faster first-paint.
+    """
+    _check_day_reset()
+    try:
+        os.makedirs(PROGRAM_DATA, exist_ok=True)
+        total_scored = _acc_active if _acc_active else 1
+        score = round(_acc_productive / total_scored * 100, 1)
+
+        top_apps = sorted(
+            [{"app": a, "time": t,
+              "category": _local_categorize(a, "")}
+             for a, t in _acc_app_times.items()],
+            key=lambda x: x["time"], reverse=True
+        )[:10]
+
+        top_app = top_apps[0]["app"] if top_apps else "None"
+
+        payload = {
+            "date":         _acc_date,
+            "last_updated": datetime.now(timezone.utc).isoformat(),
+            "username":     username,
+            "device":       device,
+            "summary": {
+                "total_active_time":     _acc_active,
+                "total_idle_time":       _acc_idle,
+                "total_screen_off_time": _acc_locked,
+                "productivity_score":    score,
+                "top_app":               top_app,
+            },
+            "top_apps":       top_apps,
+            "hourly_active":  _acc_hourly,
+        }
+        tmp = CACHE_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+        os.replace(tmp, CACHE_PATH)
+    except Exception:
+        pass  # non-fatal
 
 
 # ── Structured logging ───────────────────────────────────────────────────────────
@@ -311,6 +461,7 @@ def extract_domain(hwnd, process_name: str) -> str:
 
 def rotate_logs():
     try:
+        os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
         if os.path.exists(LOG_FILE) and os.path.getsize(LOG_FILE) > MAX_LOG_SIZE:
             old = LOG_FILE + ".old"
             if os.path.exists(old):
@@ -590,6 +741,100 @@ def check_connection(retries: int = 3, delay: int = 5) -> bool:
     return False
 
 
+# ── Auto-update ──────────────────────────────────────────────────────────────────
+
+def _ver(v: str) -> tuple:
+    """'2.10' → (2, 10) for correct numeric comparison."""
+    try:
+        return tuple(int(x) for x in v.strip().split("."))
+    except Exception:
+        return (0,)
+
+
+def _do_update(download_url: str, current_exe: str) -> None:
+    """
+    Download new EXE to a temp file, then hand off to a detached .bat script
+    that waits for this process to exit, copies the file into place, and
+    re-launches the agent.  The bat deletes itself when done.
+    """
+    tmp_dir  = os.path.join(tempfile.gettempdir(), "TelemetryAgent")
+    os.makedirs(tmp_dir, exist_ok=True)
+    tmp_exe  = os.path.join(tmp_dir, "telemetry_agent_new.exe")
+    bat_path = os.path.join(tmp_dir, "updater.bat")
+
+    _LOG.info("Auto-update: downloading new EXE from %s", download_url)
+    try:
+        with requests.get(download_url, stream=True, timeout=60) as r:
+            r.raise_for_status()
+            with open(tmp_exe, "wb") as f:
+                for chunk in r.iter_content(chunk_size=65536):
+                    f.write(chunk)
+    except Exception as e:
+        _LOG.error("Auto-update: download failed — %s", e)
+        return
+
+    # Validate — must be non-empty
+    if os.path.getsize(tmp_exe) < 1024:
+        _LOG.error("Auto-update: downloaded file too small, aborting")
+        return
+
+    _LOG.info("Auto-update: download complete (%d bytes), preparing updater",
+              os.path.getsize(tmp_exe))
+
+    bat = (
+        "@echo off\n"
+        "timeout /t 3 /nobreak >nul\n"
+        f'copy /y "{tmp_exe}" "{current_exe}" >nul\n'
+        f'start "" "{current_exe}"\n'
+        'del "%~f0"\n'
+    )
+    with open(bat_path, "w", encoding="ascii") as f:
+        f.write(bat)
+
+    subprocess.Popen(
+        ["cmd.exe", "/c", bat_path],
+        creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW,
+        close_fds=True,
+    )
+    _LOG.info("Auto-update: updater launched — exiting for replacement")
+    sys.exit(0)
+
+
+def check_for_update() -> None:
+    """
+    Called once at startup (frozen EXE only).
+    Queries /api/health for the server version; if newer than AGENT_VERSION
+    downloads and self-replaces via _do_update().
+    Skips silently in dev mode (no sys.frozen) or on any network error.
+    """
+    if not getattr(sys, "frozen", False):
+        return   # dev mode — never self-replace
+
+    current_exe = sys.executable
+    base        = _base_url()
+    health_url  = f"{base}/api/health"
+
+    try:
+        resp = requests.get(health_url, timeout=10)
+        if not resp.ok:
+            return
+        data            = resp.json()
+        server_version  = data.get("version", "0")
+        download_url    = data.get("agent_download_url", f"{base}/download-agent")
+    except Exception as e:
+        _LOG.debug("Auto-update check skipped: %s", e)
+        return
+
+    if _ver(server_version) > _ver(AGENT_VERSION):
+        _LOG.info(
+            "Auto-update: server has v%s, running v%s — updating",
+            server_version, AGENT_VERSION,
+        )
+        _do_update(download_url, current_exe)
+    else:
+        _LOG.info("Auto-update: up to date (v%s)", AGENT_VERSION)
+
+
 def _register_scheduled_task(exe_path: str) -> bool:
     """
     Create (or replace) a Windows Scheduled Task named TelemetryAgent
@@ -615,18 +860,26 @@ def _register_scheduled_task(exe_path: str) -> bool:
         return False
 
 
-def install(server_url: str = None) -> None:
+def install(server_url: str = None, admin_key: str = None) -> None:
     """
     Full installation routine:
       1. Create C:\\ProgramData\\TelemetryAgent and C:\\Program Files\\TelemetryAgent
-      2. Resolve server URL (arg → /agent-config fetch → INGEST_URL fallback)
-      3. Write config.json to ProgramData
-      4. Copy EXE to install dir (when running as frozen EXE)
-      5. Register Windows Scheduled Task (logon trigger)
-      6. Run connection check and report result
+      2. Resolve server URL from /agent-config (public endpoint)
+      3. Register this device → server generates a per-user key (requires admin_key,
+         passed as --admin-key CLI arg; NEVER written to config.json)
+      4. Write config.json with only the per-user key
+      5. Copy EXE to install dir (when running as frozen EXE)
+      6. Register Windows Scheduled Task (logon trigger)
+      7. Run connection check and report result
 
     Usage:
-        telemetry_agent.exe --install --server-url http://your-server:8000
+        telemetry_agent.exe --install --server-url https://host --admin-key <key>
+
+    Security
+    --------
+    admin_key is used once to call POST /api/register-device, which returns a
+    per-user device key.  Only that device key is stored in config.json.
+    The admin key is discarded immediately after registration and never touches disk.
     """
     _LOG.info("=== Telemetry Agent Installation ===")
 
@@ -639,29 +892,51 @@ def install(server_url: str = None) -> None:
             _LOG.error("  Permission denied creating %s — run as Administrator", d)
             sys.exit(1)
 
-    # 2. Resolve base server URL and fetch agent API key from /agent-config
-    base      = (server_url or _base_url()).rstrip("/")
-    agent_key = ""
+    # 2. Resolve base server URL from public /agent-config
+    base = (server_url or _base_url()).rstrip("/")
     try:
         resp = requests.get(f"{base}/agent-config", timeout=10)
         if resp.ok:
-            cfg_data  = resp.json()
-            fetched   = cfg_data.get("server_url", "").rstrip("/")
-            agent_key = cfg_data.get("agent_api_key", "")
+            fetched = resp.json().get("server_url", "").rstrip("/")
             if fetched:
                 _LOG.info("  /agent-config returned server_url: %s", fetched)
                 base = fetched
-            if agent_key:
-                _LOG.info("  /agent-config provided agent_api_key (length %d)", len(agent_key))
-            else:
-                _LOG.warning("  /agent-config did not return agent_api_key — set AGENT_API_KEY on server")
     except Exception as e:
         _LOG.warning("  Could not fetch /agent-config: %s — using %s", e, base)
 
-    # 3. Write config.json
+    # 3. Register device → get per-user key (admin_key used once, never stored)
+    username  = getpass.getuser()
+    agent_key = ""
+    if admin_key:
+        try:
+            resp = requests.post(
+                f"{base}/api/register-device",
+                json={"username": username},
+                headers={"X-API-Key": admin_key},
+                timeout=10,
+            )
+            if resp.ok:
+                agent_key = resp.json().get("agent_key", "")
+                _LOG.info("  Device registered — per-user key issued (length %d)", len(agent_key))
+            else:
+                _LOG.warning(
+                    "  /api/register-device returned HTTP %d — "
+                    "agent will run without a key (server may reject /ingest)",
+                    resp.status_code,
+                )
+        except Exception as e:
+            _LOG.warning("  Device registration failed: %s", e)
+        # admin_key goes out of scope here — never written anywhere
+    else:
+        _LOG.warning(
+            "  No --admin-key supplied — agent key not registered. "
+            "Pass --admin-key <key> to enable secure per-user authentication."
+        )
+
+    # 4. Write config.json  (admin key is ABSENT — only the per-user key is stored)
     config = {
         "ingest_url":     f"{base}/ingest",
-        "api_key":        agent_key,
+        "api_key":        agent_key,   # per-user device key (scoped to this user only)
         "idle_threshold": IDLE_THRESHOLD,
         "tick_interval":  TICK_INTERVAL,
         "log_interval":   LOG_INTERVAL,
@@ -733,6 +1008,60 @@ def install(server_url: str = None) -> None:
     _LOG.info("  Agent    : %s", exe_dest)
 
 
+def uninstall() -> None:
+    """
+    Clean removal of the agent from this machine:
+      1. Stop and delete the TelemetryAgent scheduled task
+      2. Terminate any other running agent processes
+      3. Delete C:\\Program Files\\TelemetryAgent\\
+      4. Delete C:\\ProgramData\\TelemetryAgent\\  (config, logs, cache, status)
+      5. Delete %TEMP%\\TelemetryAgent\\            (rolling logs)
+      6. Delete %TEMP%\\telemetry_backup\\<user>\\   (offline event batches)
+
+    Cloud data is NOT touched — only local files are removed.
+    """
+    _LOG.info("=== Telemetry Agent Uninstall ===")
+
+    # 1. Stop scheduled task
+    try:
+        subprocess.call(
+            ["schtasks", "/delete", "/tn", "TelemetryAgent", "/f"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        _LOG.info("  Scheduled task removed")
+    except Exception as e:
+        _LOG.warning("  Could not remove scheduled task: %s", e)
+
+    # 2. Kill other running agent processes (not self)
+    try:
+        import psutil
+        for proc in psutil.process_iter(["pid", "name"]):
+            if proc.info["name"] == "telemetry_agent.exe" and proc.pid != os.getpid():
+                proc.terminate()
+                _LOG.info("  Terminated PID %d", proc.pid)
+    except Exception as e:
+        _LOG.warning("  Could not terminate running agents: %s", e)
+
+    # 3–6. Delete local directories
+    username = getpass.getuser()
+    paths_to_remove = [
+        INSTALL_DIR,
+        PROGRAM_DATA,
+        os.path.join(tempfile.gettempdir(), "TelemetryAgent"),
+        os.path.join(tempfile.gettempdir(), "telemetry_backup", username),
+    ]
+    for path in paths_to_remove:
+        try:
+            shutil.rmtree(path, ignore_errors=True)
+            _LOG.info("  Removed: %s", path)
+        except Exception as e:
+            _LOG.warning("  Could not remove %s: %s", path, e)
+
+    _LOG.info("=== Uninstall complete — cloud data is not affected ===")
+    print("\nTelemetry Agent has been removed from this machine.")
+    print("Cloud data is not affected. Re-run the installer to re-onboard.\n")
+
+
 # ── Main loop ───────────────────────────────────────────────────────────────────
 
 def main():
@@ -744,15 +1073,30 @@ def main():
     )
     parser.add_argument(
         "--server-url", metavar="URL", default=None,
-        help="Server base URL for install (e.g. http://host:8000)",
+        help="Server base URL for install (e.g. https://host:8000)",
+    )
+    parser.add_argument(
+        "--admin-key", metavar="KEY", default=None,
+        help="Admin API key — used ONCE to register this device; never stored on disk",
+    )
+    parser.add_argument(
+        "--uninstall", action="store_true",
+        help="Remove agent: stop scheduled task, delete files and config",
     )
     args = parser.parse_args()
 
     _setup_logging()
 
     if args.install:
-        install(server_url=args.server_url)
+        install(server_url=args.server_url, admin_key=args.admin_key)
         return
+
+    if args.uninstall:
+        uninstall()
+        return
+
+    # ── Auto-update check (frozen EXE only; exits+restarts if newer available) ─
+    check_for_update()
 
     # ── Normal run ────────────────────────────────────────────────────────────
     user_info = get_user_info()
@@ -765,7 +1109,7 @@ def main():
     elapsed_since_flush: int = 0
     last_event_app:     str  = None  # tracks app at last event boundary for change detection
 
-    _LOG.info("Agent started — %s @ %s", username, hostname)
+    _LOG.info("Agent started v%s — %s @ %s", AGENT_VERSION, username, hostname)
     _LOG.info(
         "Tick: %ds | Event: every %ds | Flush: every %ds or on app-switch | URL: %s",
         TICK_INTERVAL, LOG_INTERVAL, FLUSH_INTERVAL, INGEST_URL,
@@ -829,6 +1173,9 @@ def main():
             elapsed_since_log   += TICK_INTERVAL
             elapsed_since_flush += TICK_INTERVAL
 
+            # ── Write real-time status (every tick = ~5 s lag for UI) ────────────
+            _write_status_file(app_name, is_active, is_locked, idle_secs)
+
             # ── Every LOG_INTERVAL: build one raw event ──────────────────────────
             if elapsed_since_log >= LOG_INTERVAL:
                 rotate_logs()
@@ -864,6 +1211,10 @@ def main():
                 })
                 # Persist timestamp so next startup can detect any gap (sleep/shutdown)
                 _save_last_seen(now, state.current_app)
+
+                # ── Update local cache (UI reads this when server unreachable) ────
+                _accumulate(state.current_app, domain, is_active, is_locked, LOG_INTERVAL)
+                _write_cache(username, hostname)
 
                 # ── Flush triggers ───────────────────────────────────────────────
                 # 1. Time-based: FLUSH_INTERVAL seconds have elapsed since last flush

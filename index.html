@@ -21,6 +21,13 @@
         .sidebar-group { display: flex; align-items: center; gap: 9px; padding: 7px 16px; font-size: 12.5px; font-weight: 500; color: #475569; cursor: pointer; transition: background .12s; border-right: 3px solid transparent; }
         .sidebar-group:hover { background: #f8fafc; }
         .sidebar-group.active { background: #fdf4ff; color: #9333ea; border-right-color: #9333ea; }
+        .agent-tab { background: transparent; color: #64748b; border: none; }
+        .agent-tab:hover { background: #f1f5f9; color: #334155; }
+        .agent-tab.active { background: #eef2ff; color: #4f46e5; }
+        .toggle-on  { background: #2563eb; }
+        .toggle-off { background: #cbd5e1; }
+        .toggle-on  .toggle-thumb { transform: translateX(20px); }
+        .toggle-off .toggle-thumb { transform: translateX(0); }
     </style>
 </head>
 <body class="bg-slate-100 text-slate-900">
@@ -69,11 +76,20 @@
 
         <!-- Logo -->
         <div class="px-5 py-4 border-b border-slate-100 flex-shrink-0">
-            <div class="flex items-center gap-2.5">
-                <div class="bg-indigo-600 p-2 rounded-lg text-white shrink-0">
-                    <i data-lucide="layout-dashboard" class="w-4 h-4"></i>
+            <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2.5">
+                    <div class="bg-indigo-600 p-2 rounded-lg text-white shrink-0">
+                        <i data-lucide="layout-dashboard" class="w-4 h-4"></i>
+                    </div>
+                    <span class="font-bold text-slate-800 text-base">ProdAnalytics</span>
                 </div>
-                <span class="font-bold text-slate-800 text-base">ProdAnalytics</span>
+                <div class="relative">
+                    <button id="notifBellBtn" onclick="toggleNotifications()" title="Notifications"
+                            class="relative p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors">
+                        <i data-lucide="bell" class="w-4 h-4"></i>
+                        <span id="notifBadge" class="hidden absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-0.5 rounded-full bg-rose-500 text-white text-[9px] font-bold flex items-center justify-center leading-none"></span>
+                    </button>
+                </div>
             </div>
         </div>
 
@@ -491,111 +507,226 @@
              VIEW: AGENT SETUP
         ============================================================ -->
         <div id="viewAgent" class="hidden p-8 space-y-6">
-            <div>
-                <h2 class="text-2xl font-bold text-slate-900">Agent Setup</h2>
-                <p class="text-sm text-slate-400 mt-1">Deploy the tracking agent on employee Windows machines</p>
-            </div>
-
-            <div class="grid grid-cols-3 gap-4">
-                <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
-                    <div class="w-8 h-8 bg-indigo-100 rounded-xl flex items-center justify-center text-indigo-600 mb-3">
-                        <i data-lucide="download" class="w-4 h-4"></i>
-                    </div>
-                    <h4 class="font-semibold text-slate-800 text-sm">1. Download</h4>
-                    <p class="text-xs text-slate-400 mt-1 leading-relaxed">Get the agent executable or use the one-click PowerShell installer</p>
-                </div>
-                <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
-                    <div class="w-8 h-8 bg-indigo-100 rounded-xl flex items-center justify-center text-indigo-600 mb-3">
-                        <i data-lucide="terminal" class="w-4 h-4"></i>
-                    </div>
-                    <h4 class="font-semibold text-slate-800 text-sm">2. Install</h4>
-                    <p class="text-xs text-slate-400 mt-1 leading-relaxed">Run as Administrator — auto-configures server URL and API key, registers a startup task</p>
-                </div>
-                <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
-                    <div class="w-8 h-8 bg-emerald-100 rounded-xl flex items-center justify-center text-emerald-600 mb-3">
-                        <i data-lucide="activity" class="w-4 h-4"></i>
-                    </div>
-                    <h4 class="font-semibold text-slate-800 text-sm">3. Done</h4>
-                    <p class="text-xs text-slate-400 mt-1 leading-relaxed">Agent starts immediately and on every Windows login. Employee appears in dashboard within 2 minutes</p>
+            <div class="flex items-center justify-between">
+                <div>
+                    <h2 class="text-2xl font-bold text-slate-900">Agent Setup</h2>
+                    <p class="text-sm text-slate-400 mt-1">Deploy and manage the tracking agent on Windows machines</p>
                 </div>
             </div>
 
-            <div class="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
-                <div class="flex items-center gap-3 mb-5">
-                    <div class="bg-slate-900 p-2.5 rounded-xl">
-                        <i data-lucide="terminal" class="w-4 h-4 text-emerald-400"></i>
+            <!-- Tab bar -->
+            <div class="flex gap-1 bg-slate-100 p-1 rounded-xl w-fit">
+                <button id="agentTabInstall"   onclick="switchAgentTab('install')"   class="agent-tab active px-4 py-1.5 rounded-lg text-sm font-semibold transition-all">Full Install</button>
+                <button id="agentTabUi"        onclick="switchAgentTab('ui')"        class="agent-tab px-4 py-1.5 rounded-lg text-sm font-semibold transition-all">UI Companion</button>
+                <button id="agentTabUninstall" onclick="switchAgentTab('uninstall')" class="agent-tab px-4 py-1.5 rounded-lg text-sm font-semibold transition-all">Uninstall</button>
+            </div>
+
+            <!-- ── Tab: Install Agent ── -->
+            <div id="agentPanelInstall" class="space-y-5">
+                <div class="grid grid-cols-4 gap-4">
+                    <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+                        <div class="w-8 h-8 bg-indigo-100 rounded-xl flex items-center justify-center text-indigo-600 mb-3"><i data-lucide="terminal" class="w-4 h-4"></i></div>
+                        <h4 class="font-semibold text-slate-800 text-sm">1. Run one command</h4>
+                        <p class="text-xs text-slate-400 mt-1 leading-relaxed">Paste the PowerShell command in any terminal on the employee machine — UAC handles elevation</p>
                     </div>
-                    <div>
-                        <h3 class="font-bold text-slate-800">One-Click PowerShell Installer</h3>
-                        <p class="text-xs text-slate-400 mt-0.5">Run as Administrator on each employee machine</p>
+                    <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+                        <div class="w-8 h-8 bg-indigo-100 rounded-xl flex items-center justify-center text-indigo-600 mb-3"><i data-lucide="bot" class="w-4 h-4"></i></div>
+                        <h4 class="font-semibold text-slate-800 text-sm">2. Agent installed</h4>
+                        <p class="text-xs text-slate-400 mt-1 leading-relaxed">Downloads agent, writes server URL + unique device key, registers ONLOGON scheduled task, starts immediately</p>
+                    </div>
+                    <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+                        <div class="w-8 h-8 bg-purple-100 rounded-xl flex items-center justify-center text-purple-600 mb-3"><i data-lucide="monitor" class="w-4 h-4"></i></div>
+                        <h4 class="font-semibold text-slate-800 text-sm">3. UI companion installed</h4>
+                        <p class="text-xs text-slate-400 mt-1 leading-relaxed">Downloads UI tray app to Program Files, registers its own ONLOGON task, launches it immediately</p>
+                    </div>
+                    <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+                        <div class="w-8 h-8 bg-emerald-100 rounded-xl flex items-center justify-center text-emerald-600 mb-3"><i data-lucide="activity" class="w-4 h-4"></i></div>
+                        <h4 class="font-semibold text-slate-800 text-sm">4. Live in &lt; 2 min</h4>
+                        <p class="text-xs text-slate-400 mt-1 leading-relaxed">Employee appears in dashboard, tray icon shows real-time status. No reboot required.</p>
                     </div>
                 </div>
-                <div class="flex items-center gap-3 bg-slate-900 rounded-2xl px-5 py-4 mb-5">
-                    <i data-lucide="chevron-right" class="w-4 h-4 text-slate-500 shrink-0"></i>
-                    <code id="installCmd" class="flex-1 text-sm text-emerald-400 font-mono break-all">Loading...</code>
-                    <button id="copyBtn" onclick="copyInstallCmd()"
-                            class="shrink-0 p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700 transition-all" title="Copy">
-                        <i data-lucide="copy" class="w-4 h-4"></i>
-                    </button>
+
+                <div class="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
+                    <div class="flex items-center gap-3 mb-4">
+                        <div class="bg-slate-900 p-2.5 rounded-xl"><i data-lucide="terminal" class="w-4 h-4 text-emerald-400"></i></div>
+                        <div>
+                            <h3 class="font-bold text-slate-800">One Command — Installs Everything</h3>
+                            <p class="text-xs text-slate-400 mt-0.5">Installs agent + UI companion. Run in any PowerShell window on the employee machine.</p>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-3 bg-slate-900 rounded-2xl px-5 py-4 mb-4">
+                        <i data-lucide="chevron-right" class="w-4 h-4 text-slate-500 shrink-0"></i>
+                        <code id="installCmd" class="flex-1 text-sm text-emerald-400 font-mono break-all">Loading...</code>
+                        <button id="copyBtn" onclick="copyAgentCmd('installCmd','copyBtn')" class="shrink-0 p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700 transition-all" title="Copy">
+                            <i data-lucide="copy" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+                    <div class="grid grid-cols-2 gap-3 mb-4">
+                        <div class="flex items-start gap-2.5 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2.5">
+                            <i data-lucide="check-circle" class="w-4 h-4 text-emerald-500 shrink-0 mt-0.5"></i>
+                            <p class="text-xs text-emerald-700 leading-relaxed">Agent tracks activity, uploads to server, auto-updates, works offline</p>
+                        </div>
+                        <div class="flex items-start gap-2.5 bg-purple-50 border border-purple-100 rounded-xl px-3 py-2.5">
+                            <i data-lucide="check-circle" class="w-4 h-4 text-purple-500 shrink-0 mt-0.5"></i>
+                            <p class="text-xs text-purple-700 leading-relaxed">UI companion shows tray icon + personal productivity popup with historical data</p>
+                        </div>
+                    </div>
+                    <div class="flex items-start gap-3 bg-amber-50 border border-amber-100 rounded-2xl px-4 py-3">
+                        <i data-lucide="info" class="w-4 h-4 text-amber-500 shrink-0 mt-0.5"></i>
+                        <p class="text-xs text-amber-700 leading-relaxed">UAC prompt will appear once. Both programs register ONLOGON scheduled tasks — they start automatically after every login, no manual action needed by the employee.</p>
+                    </div>
                 </div>
-                <div class="flex items-start gap-3 bg-amber-50 border border-amber-100 rounded-2xl px-4 py-3">
-                    <i data-lucide="info" class="w-4 h-4 text-amber-500 shrink-0 mt-0.5"></i>
-                    <p class="text-xs text-amber-700 leading-relaxed">
-                        The script will request Administrator access via UAC. It downloads the agent, configures the server URL and API key automatically, registers a scheduled task, and starts the agent immediately — no reboot required.
-                    </p>
+
+                <div class="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
+                    <h3 class="font-bold text-slate-800 mb-3">Manual Downloads</h3>
+                    <div class="flex gap-3 flex-wrap">
+                        <a id="agentDownloadBtn" href="#" class="flex items-center gap-2.5 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl text-sm transition-all">
+                            <i data-lucide="download" class="w-4 h-4"></i>telemetry_agent.exe
+                        </a>
+                        <a id="uiDownloadBtn" href="#" class="flex items-center gap-2.5 px-5 py-2.5 bg-purple-600 hover:bg-purple-700 text-white font-semibold rounded-xl text-sm transition-all">
+                            <i data-lucide="download" class="w-4 h-4"></i>telemetry_ui.exe
+                        </a>
+                        <a id="scriptDownloadBtn" href="#" class="flex items-center gap-2.5 px-5 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-700 font-semibold rounded-xl text-sm transition-all">
+                            <i data-lucide="file-code" class="w-4 h-4"></i>install_prodanalytics.ps1
+                        </a>
+                    </div>
+                </div>
+
+                <div class="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
+                    <h3 class="font-bold text-slate-800 mb-4">How it works</h3>
+                    <div class="grid grid-cols-2 gap-5 text-sm">
+                        <div class="space-y-3">
+                            <div class="flex gap-3"><span class="shrink-0 w-5 h-5 rounded-full bg-indigo-100 text-indigo-600 text-xs font-bold flex items-center justify-center mt-0.5">1</span><div><p class="font-medium text-slate-700">Samples every 5 s</p><p class="text-xs text-slate-400 mt-0.5">Foreground window, idle time, lock screen</p></div></div>
+                            <div class="flex gap-3"><span class="shrink-0 w-5 h-5 rounded-full bg-indigo-100 text-indigo-600 text-xs font-bold flex items-center justify-center mt-0.5">2</span><div><p class="font-medium text-slate-700">Builds events every 30 s</p><p class="text-xs text-slate-400 mt-0.5">Aggregates samples, merges consecutive same-app runs</p></div></div>
+                            <div class="flex gap-3"><span class="shrink-0 w-5 h-5 rounded-full bg-indigo-100 text-indigo-600 text-xs font-bold flex items-center justify-center mt-0.5">3</span><div><p class="font-medium text-slate-700">Flushes every 60 s</p><p class="text-xs text-slate-400 mt-0.5">Batch upload, or immediately on app switch</p></div></div>
+                        </div>
+                        <div class="space-y-3">
+                            <div class="flex gap-3"><span class="shrink-0 w-5 h-5 rounded-full bg-emerald-100 text-emerald-600 text-xs font-bold flex items-center justify-center mt-0.5">✓</span><div><p class="font-medium text-slate-700">Offline resilient</p><p class="text-xs text-slate-400 mt-0.5">Saves to disk when server unreachable, replays on reconnect</p></div></div>
+                            <div class="flex gap-3"><span class="shrink-0 w-5 h-5 rounded-full bg-emerald-100 text-emerald-600 text-xs font-bold flex items-center justify-center mt-0.5">✓</span><div><p class="font-medium text-slate-700">Auto-update</p><p class="text-xs text-slate-400 mt-0.5">Checks server version on startup, self-updates if newer</p></div></div>
+                            <div class="flex gap-3"><span class="shrink-0 w-5 h-5 rounded-full bg-emerald-100 text-emerald-600 text-xs font-bold flex items-center justify-center mt-0.5">✓</span><div><p class="font-medium text-slate-700">Per-user key security</p><p class="text-xs text-slate-400 mt-0.5">Each device gets a unique scoped key; admin key never stored</p></div></div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
-            <div class="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
-                <h3 class="font-bold text-slate-800 mb-4">Manual Download</h3>
-                <div class="flex gap-3">
-                    <a id="agentDownloadBtn" href="#"
-                       class="flex items-center gap-2.5 px-5 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl text-sm transition-all">
-                        <i data-lucide="download" class="w-4 h-4"></i>
-                        telemetry_agent.exe
-                    </a>
-                    <a id="scriptDownloadBtn" href="#"
-                       class="flex items-center gap-2.5 px-5 py-3 border border-slate-200 hover:bg-slate-50 text-slate-700 font-semibold rounded-xl text-sm transition-all">
-                        <i data-lucide="file-code" class="w-4 h-4"></i>
-                        install_agent.ps1
-                    </a>
+            <!-- ── Tab: UI Companion ── -->
+            <div id="agentPanelUi" class="space-y-5 hidden">
+                <div class="grid grid-cols-3 gap-4">
+                    <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+                        <div class="w-8 h-8 bg-purple-100 rounded-xl flex items-center justify-center text-purple-600 mb-3"><i data-lucide="monitor" class="w-4 h-4"></i></div>
+                        <h4 class="font-semibold text-slate-800 text-sm">1. Agent must be installed</h4>
+                        <p class="text-xs text-slate-400 mt-1 leading-relaxed">The UI companion reads config and cache files written by the agent. Install the agent first.</p>
+                    </div>
+                    <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+                        <div class="w-8 h-8 bg-purple-100 rounded-xl flex items-center justify-center text-purple-600 mb-3"><i data-lucide="download" class="w-4 h-4"></i></div>
+                        <h4 class="font-semibold text-slate-800 text-sm">2. Download &amp; run</h4>
+                        <p class="text-xs text-slate-400 mt-1 leading-relaxed">No install step needed — place <code class="bg-slate-100 px-1 rounded">telemetry_ui.exe</code> anywhere and run it. Shows as a system tray icon.</p>
+                    </div>
+                    <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+                        <div class="w-8 h-8 bg-emerald-100 rounded-xl flex items-center justify-center text-emerald-600 mb-3"><i data-lucide="bar-chart-2" class="w-4 h-4"></i></div>
+                        <h4 class="font-semibold text-slate-800 text-sm">3. Instant stats</h4>
+                        <p class="text-xs text-slate-400 mt-1 leading-relaxed">Click the tray icon to see productive hours, 24h activity, top apps and historical date picker — offline or live.</p>
+                    </div>
                 </div>
-                <p class="text-xs text-slate-400 mt-3">
-                    After downloading the EXE, run:
-                    <code class="bg-slate-100 px-1.5 py-0.5 rounded text-slate-600">telemetry_agent.exe --install --server-url &lt;your-server&gt;</code>
-                </p>
-            </div>
 
-            <div class="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
-                <h3 class="font-bold text-slate-800 mb-4">How the Agent Works</h3>
-                <div class="grid grid-cols-2 gap-6 text-sm">
-                    <div class="space-y-3">
-                        <div class="flex gap-3">
-                            <span class="shrink-0 w-5 h-5 rounded-full bg-indigo-100 text-indigo-600 text-xs font-bold flex items-center justify-center mt-0.5">1</span>
-                            <div><p class="font-medium text-slate-700">Samples every 5 seconds</p><p class="text-xs text-slate-400 mt-0.5">Checks foreground window, idle time, lock state</p></div>
-                        </div>
-                        <div class="flex gap-3">
-                            <span class="shrink-0 w-5 h-5 rounded-full bg-indigo-100 text-indigo-600 text-xs font-bold flex items-center justify-center mt-0.5">2</span>
-                            <div><p class="font-medium text-slate-700">Builds events every 60 s</p><p class="text-xs text-slate-400 mt-0.5">Aggregates samples into a single event per minute</p></div>
-                        </div>
-                        <div class="flex gap-3">
-                            <span class="shrink-0 w-5 h-5 rounded-full bg-indigo-100 text-indigo-600 text-xs font-bold flex items-center justify-center mt-0.5">3</span>
-                            <div><p class="font-medium text-slate-700">Sends every 2 minutes</p><p class="text-xs text-slate-400 mt-0.5">Batch upload to server, or on app switch</p></div>
+                <div class="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
+                    <div class="flex items-center gap-3 mb-4">
+                        <div class="bg-slate-900 p-2.5 rounded-xl"><i data-lucide="terminal" class="w-4 h-4 text-emerald-400"></i></div>
+                        <div>
+                            <h3 class="font-bold text-slate-800">PowerShell — Install UI Companion</h3>
+                            <p class="text-xs text-slate-400 mt-0.5">Downloads and places the EXE; no admin required</p>
                         </div>
                     </div>
-                    <div class="space-y-3">
-                        <div class="flex gap-3">
-                            <span class="shrink-0 w-5 h-5 rounded-full bg-emerald-100 text-emerald-600 text-xs font-bold flex items-center justify-center mt-0.5">&#10003;</span>
-                            <div><p class="font-medium text-slate-700">Offline resilient</p><p class="text-xs text-slate-400 mt-0.5">Saves batches locally if server unreachable, replays on reconnect</p></div>
+                    <div class="flex items-center gap-3 bg-slate-900 rounded-2xl px-5 py-4 mb-4">
+                        <i data-lucide="chevron-right" class="w-4 h-4 text-slate-500 shrink-0"></i>
+                        <code id="uiInstallCmd" class="flex-1 text-sm text-emerald-400 font-mono break-all">Loading...</code>
+                        <button id="copyUiBtn" onclick="copyAgentCmd('uiInstallCmd','copyUiBtn')" class="shrink-0 p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700 transition-all" title="Copy">
+                            <i data-lucide="copy" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+                    <div class="flex items-start gap-3 bg-blue-50 border border-blue-100 rounded-2xl px-4 py-3">
+                        <i data-lucide="info" class="w-4 h-4 text-blue-500 shrink-0 mt-0.5"></i>
+                        <p class="text-xs text-blue-700 leading-relaxed">Downloads <strong>telemetry_ui.exe</strong> to <code class="bg-blue-100 px-1 rounded">%LOCALAPPDATA%\TelemetryUI\</code>, then launches it. The UI reads <code class="bg-blue-100 px-1 rounded">C:\ProgramData\TelemetryAgent\config.json</code> (written by the agent installer) — no additional configuration needed.</p>
+                    </div>
+                </div>
+
+                <div class="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
+                    <h3 class="font-bold text-slate-800 mb-3">Manual Download</h3>
+                    <div class="flex gap-3 flex-wrap">
+                        <a id="uiDownloadBtn" href="#" class="flex items-center gap-2.5 px-5 py-2.5 bg-purple-600 hover:bg-purple-700 text-white font-semibold rounded-xl text-sm transition-all">
+                            <i data-lucide="download" class="w-4 h-4"></i>telemetry_ui.exe
+                        </a>
+                    </div>
+                    <p class="text-xs text-slate-400 mt-3">To auto-start with Windows: add a shortcut to <code class="bg-slate-100 px-1.5 py-0.5 rounded text-slate-600">%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup</code></p>
+                </div>
+
+                <div class="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
+                    <h3 class="font-bold text-slate-800 mb-4">UI Companion Features</h3>
+                    <div class="grid grid-cols-2 gap-5 text-sm">
+                        <div class="space-y-3">
+                            <div class="flex gap-3"><span class="shrink-0 w-5 h-5 rounded-full bg-purple-100 text-purple-600 text-xs font-bold flex items-center justify-center mt-0.5">✓</span><div><p class="font-medium text-slate-700">Live status tray icon</p><p class="text-xs text-slate-400 mt-0.5">Green/yellow/red dot reflects Active / Idle / Away in real time</p></div></div>
+                            <div class="flex gap-3"><span class="shrink-0 w-5 h-5 rounded-full bg-purple-100 text-purple-600 text-xs font-bold flex items-center justify-center mt-0.5">✓</span><div><p class="font-medium text-slate-700">Productive vs unproductive donut</p><p class="text-xs text-slate-400 mt-0.5">Visual breakdown of hours spent on productive vs unproductive apps</p></div></div>
+                            <div class="flex gap-3"><span class="shrink-0 w-5 h-5 rounded-full bg-purple-100 text-purple-600 text-xs font-bold flex items-center justify-center mt-0.5">✓</span><div><p class="font-medium text-slate-700">24-hour activity bars</p><p class="text-xs text-slate-400 mt-0.5">See which hours of the day had the most active screen time</p></div></div>
                         </div>
-                        <div class="flex gap-3">
-                            <span class="shrink-0 w-5 h-5 rounded-full bg-emerald-100 text-emerald-600 text-xs font-bold flex items-center justify-center mt-0.5">&#10003;</span>
-                            <div><p class="font-medium text-slate-700">Sleep/wake aware</p><p class="text-xs text-slate-400 mt-0.5">Detects system sleep and records screen-off time accurately</p></div>
+                        <div class="space-y-3">
+                            <div class="flex gap-3"><span class="shrink-0 w-5 h-5 rounded-full bg-purple-100 text-purple-600 text-xs font-bold flex items-center justify-center mt-0.5">✓</span><div><p class="font-medium text-slate-700">Date picker (historical)</p><p class="text-xs text-slate-400 mt-0.5">Browse any past date — data fetched from server</p></div></div>
+                            <div class="flex gap-3"><span class="shrink-0 w-5 h-5 rounded-full bg-purple-100 text-purple-600 text-xs font-bold flex items-center justify-center mt-0.5">✓</span><div><p class="font-medium text-slate-700">Offline-first</p><p class="text-xs text-slate-400 mt-0.5">Today's data from local cache with &lt; 5 s lag; server enriches when reachable</p></div></div>
+                            <div class="flex gap-3"><span class="shrink-0 w-5 h-5 rounded-full bg-purple-100 text-purple-600 text-xs font-bold flex items-center justify-center mt-0.5">✓</span><div><p class="font-medium text-slate-700">Top apps list</p><p class="text-xs text-slate-400 mt-0.5">Ranked by time spent, colour-coded by productivity category</p></div></div>
                         </div>
-                        <div class="flex gap-3">
-                            <span class="shrink-0 w-5 h-5 rounded-full bg-emerald-100 text-emerald-600 text-xs font-bold flex items-center justify-center mt-0.5">&#10003;</span>
-                            <div><p class="font-medium text-slate-700">Auto-start on login</p><p class="text-xs text-slate-400 mt-0.5">Registered as a Windows Scheduled Task, runs on every logon</p></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ── Tab: Uninstall ── -->
+            <div id="agentPanelUninstall" class="space-y-5 hidden">
+                <div class="grid grid-cols-3 gap-4">
+                    <div class="bg-white rounded-2xl border border-rose-100 p-5 shadow-sm">
+                        <div class="w-8 h-8 bg-rose-100 rounded-xl flex items-center justify-center text-rose-600 mb-3"><i data-lucide="terminal" class="w-4 h-4"></i></div>
+                        <h4 class="font-semibold text-slate-800 text-sm">1. Run uninstall script</h4>
+                        <p class="text-xs text-slate-400 mt-1 leading-relaxed">Copy the command and run it as Administrator on the machine to be removed</p>
+                    </div>
+                    <div class="bg-white rounded-2xl border border-rose-100 p-5 shadow-sm">
+                        <div class="w-8 h-8 bg-rose-100 rounded-xl flex items-center justify-center text-rose-600 mb-3"><i data-lucide="trash-2" class="w-4 h-4"></i></div>
+                        <h4 class="font-semibold text-slate-800 text-sm">2. Local files removed</h4>
+                        <p class="text-xs text-slate-400 mt-1 leading-relaxed">Stops scheduled task, kills agent process, deletes EXE, config, logs and temp files</p>
+                    </div>
+                    <div class="bg-white rounded-2xl border border-emerald-100 p-5 shadow-sm">
+                        <div class="w-8 h-8 bg-emerald-100 rounded-xl flex items-center justify-center text-emerald-600 mb-3"><i data-lucide="cloud" class="w-4 h-4"></i></div>
+                        <h4 class="font-semibold text-slate-800 text-sm">3. Cloud data kept</h4>
+                        <p class="text-xs text-slate-400 mt-1 leading-relaxed">All telemetry data in Azure Storage is not touched. Delete from Settings if needed.</p>
+                    </div>
+                </div>
+
+                <div class="bg-white rounded-3xl border border-rose-200 shadow-sm p-6">
+                    <div class="flex items-center gap-3 mb-4">
+                        <div class="bg-rose-600 p-2.5 rounded-xl"><i data-lucide="terminal" class="w-4 h-4 text-white"></i></div>
+                        <div>
+                            <h3 class="font-bold text-slate-800">One-Click Uninstall Script</h3>
+                            <p class="text-xs text-slate-400 mt-0.5">Run as Administrator on the machine to be offboarded</p>
                         </div>
+                    </div>
+                    <div class="flex items-center gap-3 bg-slate-900 rounded-2xl px-5 py-4 mb-4">
+                        <i data-lucide="chevron-right" class="w-4 h-4 text-slate-500 shrink-0"></i>
+                        <code id="uninstallCmd" class="flex-1 text-sm text-rose-400 font-mono break-all">Loading...</code>
+                        <button id="copyUninstallBtn" onclick="copyAgentCmd('uninstallCmd','copyUninstallBtn')" class="shrink-0 p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700 transition-all" title="Copy">
+                            <i data-lucide="copy" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+                    <div class="flex items-start gap-3 bg-rose-50 border border-rose-100 rounded-2xl px-4 py-3">
+                        <i data-lucide="alert-triangle" class="w-4 h-4 text-rose-500 shrink-0 mt-0.5"></i>
+                        <p class="text-xs text-rose-700 leading-relaxed">This removes the agent from the <strong>local machine only</strong>. Employee data already in the cloud is not deleted — use Settings → Delete Employee to remove cloud data.</p>
+                    </div>
+                </div>
+
+                <div class="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
+                    <h3 class="font-bold text-slate-800 mb-3">What gets removed</h3>
+                    <div class="grid grid-cols-2 gap-3 text-sm">
+                        <div class="flex items-center gap-2.5 p-3 bg-rose-50 rounded-xl"><i data-lucide="x-circle" class="w-4 h-4 text-rose-500 shrink-0"></i><span class="text-slate-700">Scheduled Task (TelemetryAgent)</span></div>
+                        <div class="flex items-center gap-2.5 p-3 bg-rose-50 rounded-xl"><i data-lucide="x-circle" class="w-4 h-4 text-rose-500 shrink-0"></i><span class="text-slate-700">C:\Program Files\TelemetryAgent\</span></div>
+                        <div class="flex items-center gap-2.5 p-3 bg-rose-50 rounded-xl"><i data-lucide="x-circle" class="w-4 h-4 text-rose-500 shrink-0"></i><span class="text-slate-700">C:\ProgramData\TelemetryAgent\</span></div>
+                        <div class="flex items-center gap-2.5 p-3 bg-rose-50 rounded-xl"><i data-lucide="x-circle" class="w-4 h-4 text-rose-500 shrink-0"></i><span class="text-slate-700">%TEMP%\TelemetryAgent\ (local logs)</span></div>
+                        <div class="flex items-center gap-2.5 p-3 bg-emerald-50 rounded-xl"><i data-lucide="check-circle" class="w-4 h-4 text-emerald-500 shrink-0"></i><span class="text-slate-700">Azure Storage data — kept</span></div>
+                        <div class="flex items-center gap-2.5 p-3 bg-emerald-50 rounded-xl"><i data-lucide="check-circle" class="w-4 h-4 text-emerald-500 shrink-0"></i><span class="text-slate-700">Other employees — not affected</span></div>
                     </div>
                 </div>
             </div>
@@ -607,15 +738,82 @@
         <div id="viewSettings" class="hidden p-8 space-y-8">
             <div>
                 <h2 class="text-2xl font-bold text-slate-900">Settings</h2>
-                <p class="text-sm text-slate-400 mt-1">Admin configuration and employee data management</p>
+                <p class="text-sm text-slate-400 mt-1">Admin configuration, data retention and employee management</p>
             </div>
 
-            <!-- Employee Data Management -->
+            <!-- ── Data Retention ── -->
+            <div>
+                <p class="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Data Retention</p>
+                <div class="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+                    <div class="flex items-start gap-4">
+                        <div class="bg-blue-50 p-3 rounded-xl text-blue-600 shrink-0">
+                            <i data-lucide="clock" class="w-5 h-5"></i>
+                        </div>
+                        <div class="flex-1 min-w-0">
+                            <!-- Header row: title + toggle -->
+                            <div class="flex items-start justify-between gap-4 mb-1">
+                                <div>
+                                    <h4 class="font-semibold text-slate-800">Retention Period</h4>
+                                    <p class="text-sm text-slate-400 mt-0.5">Raw telemetry events older than this limit are permanently deleted from Azure Storage. After purge, historical reports for deleted dates will show no data.</p>
+                                </div>
+                                <!-- Enable / Disable toggle -->
+                                <div class="shrink-0 flex flex-col items-end gap-1">
+                                    <div class="flex items-center gap-2.5">
+                                        <span id="stRetentionToggleLbl" class="text-xs font-semibold text-slate-500">Enabled</span>
+                                        <button id="stRetentionToggle" onclick="settingsToggleRetention()"
+                                                class="relative w-10 h-5 rounded-full transition-colors focus:outline-none"
+                                                title="Enable / disable retention policy">
+                                            <span id="stRetentionToggleThumb"
+                                                  class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform"></span>
+                                        </button>
+                                    </div>
+                                    <p class="text-xs text-slate-400">Last purge</p>
+                                    <p id="stLastPurge" class="text-sm font-semibold text-slate-600">—</p>
+                                </div>
+                            </div>
+
+                            <!-- Disabled banner (shown when retention is off) -->
+                            <div id="stRetentionDisabledBanner" class="hidden mt-3 flex items-center gap-2.5 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3">
+                                <i data-lucide="pause-circle" class="w-4 h-4 text-slate-400 shrink-0"></i>
+                                <p class="text-sm text-slate-500">Retention policy is <strong>disabled</strong>. Data will accumulate indefinitely. Enable the toggle to activate automatic purging.</p>
+                            </div>
+
+                            <!-- Controls (days input + buttons) -->
+                            <div id="stRetentionControls" class="flex items-end gap-3 mt-5 flex-wrap">
+                                <div>
+                                    <label class="block text-xs font-semibold text-slate-500 uppercase mb-1.5">Retention (days)</label>
+                                    <div class="flex items-center gap-2">
+                                        <input id="stRetentionDays" type="number" min="1" max="3650" value="90"
+                                               class="w-28 px-3 py-2.5 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-blue-500 tabular-nums">
+                                        <span class="text-sm text-slate-400">days</span>
+                                    </div>
+                                </div>
+                                <button onclick="settingsSaveRetention()" id="stRetentionSaveBtn"
+                                        class="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl text-sm transition-all shrink-0">
+                                    Save
+                                </button>
+                                <button onclick="settingsRunPurge()" id="stPurgeBtn"
+                                        class="px-5 py-2.5 bg-slate-800 hover:bg-slate-900 text-white font-semibold rounded-xl text-sm transition-all shrink-0 flex items-center gap-2">
+                                    <i data-lucide="trash-2" class="w-4 h-4"></i>
+                                    Purge Now
+                                </button>
+                            </div>
+                            <div class="mt-3 flex items-start gap-2 text-xs text-slate-400">
+                                <i data-lucide="info" class="w-3.5 h-3.5 shrink-0 mt-0.5 text-slate-300"></i>
+                                <span>"Save" persists the policy. "Purge Now" immediately deletes all events older than the saved limit — this cannot be undone.</span>
+                            </div>
+                            <div id="stRetentionMsg" class="hidden mt-3 text-xs px-3 py-2 rounded-lg"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ── Employee Data Management ── -->
             <div>
                 <p class="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Employee Data Management</p>
                 <div class="space-y-4">
 
-                    <!-- Rename Employee -->
+                    <!-- Set Display Name -->
                     <div class="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
                         <div class="flex items-start gap-4">
                             <div class="bg-indigo-50 p-3 rounded-xl text-indigo-600 shrink-0">
@@ -623,16 +821,15 @@
                             </div>
                             <div class="flex-1 min-w-0">
                                 <h4 class="font-semibold text-slate-800">Set Display Name</h4>
-                                <p class="text-sm text-slate-400 mt-0.5 mb-5">Change how an employee's name appears in the dashboard. The original system username (used by the agent) stays unchanged — no data is moved, and the agent keeps reporting without creating duplicates.</p>
+                                <p class="text-sm text-slate-400 mt-0.5 mb-5">Change how an employee's name appears in the dashboard. The original system username (used by the agent) stays unchanged.</p>
                                 <div class="flex items-end gap-3 flex-wrap">
                                     <div class="flex-1 min-w-36">
                                         <label class="block text-xs font-semibold text-slate-500 uppercase mb-1.5">Employee</label>
-                                        <select id="stRenameEmployee"
-                                                class="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500 bg-white">
+                                        <select id="stRenameEmployee" class="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500 bg-white">
                                             <option value="">— select employee —</option>
                                         </select>
                                     </div>
-                                    <div class="pb-2.5 text-slate-400 shrink-0">
+                                    <div class="pb-2.5 text-slate-300 shrink-0">
                                         <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
                                     </div>
                                     <div class="flex-1 min-w-36">
@@ -658,21 +855,21 @@
                             </div>
                             <div class="flex-1 min-w-0">
                                 <h4 class="font-semibold text-slate-800">Merge Employees</h4>
-                                <p class="text-sm text-slate-400 mt-0.5 mb-5">Move all sessions from one profile into another. Use when an agent reinstall created a duplicate employee profile. The source is permanently deleted after merge.</p>
+                                <p class="text-sm text-slate-400 mt-0.5 mb-5">Move all sessions from one profile into another. Use when an agent reinstall created a duplicate. Source is permanently deleted after merge.</p>
                                 <div class="flex items-end gap-3 flex-wrap">
                                     <div class="flex-1 min-w-36">
-                                        <label class="block text-xs font-semibold text-slate-500 uppercase mb-1.5">Move FROM (source)</label>
+                                        <label class="block text-xs font-semibold text-slate-500 uppercase mb-1.5">Move FROM</label>
                                         <select id="stMergeSource" onchange="stSyncMergeTargets()"
                                                 class="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-amber-400 bg-white">
                                             <option value="">— select source —</option>
                                         </select>
                                         <p class="text-xs text-rose-500 mt-1 font-medium">will be deleted</p>
                                     </div>
-                                    <div class="pb-7 text-slate-400 shrink-0">
+                                    <div class="pb-7 text-slate-300 shrink-0">
                                         <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
                                     </div>
                                     <div class="flex-1 min-w-36">
-                                        <label class="block text-xs font-semibold text-slate-500 uppercase mb-1.5">Merge INTO (target)</label>
+                                        <label class="block text-xs font-semibold text-slate-500 uppercase mb-1.5">Merge INTO</label>
                                         <select id="stMergeTarget"
                                                 class="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-amber-400 bg-white">
                                             <option value="">— select target —</option>
@@ -935,6 +1132,20 @@
     </div>
 </div>
 
+<!-- Notification panel -->
+<div id="notifPanel" class="hidden fixed z-[250] left-4 bg-white rounded-2xl shadow-2xl border border-slate-200 w-80" style="top:64px;">
+    <div class="flex items-center justify-between px-4 py-3 border-b border-slate-100">
+        <div class="flex items-center gap-2">
+            <i data-lucide="bell" class="w-4 h-4 text-indigo-600"></i>
+            <span class="font-semibold text-slate-800 text-sm">Notifications</span>
+        </div>
+        <button onclick="markAllRead()" class="text-xs text-indigo-500 hover:text-indigo-700 font-medium transition-colors">Mark all read</button>
+    </div>
+    <div id="notifList" class="max-h-[420px] overflow-y-auto divide-y divide-slate-50">
+        <p class="text-xs text-slate-400 text-center py-8">Loading…</p>
+    </div>
+</div>
+
 <!-- Floating action menu (three-dot dropdown) -->
 <div id="actionMenu" class="hidden fixed z-[200] bg-white border border-slate-200 rounded-2xl shadow-xl py-1.5 min-w-[180px]" style="transition:opacity .1s">
 </div>
@@ -1116,8 +1327,13 @@ async function initApp() {
     const base = SERVER_BASE;
     document.getElementById('agentDownloadBtn').href  = `${base}/download-agent`;
     document.getElementById('scriptDownloadBtn').href = `${base}/install-script`;
+    document.getElementById('uiDownloadBtn').href     = `${base}/download-ui`;
     document.getElementById('installCmd').textContent =
         `powershell -ExecutionPolicy Bypass -Command "irm '${base}/install-script' | iex"`;
+    document.getElementById('uiInstallCmd').textContent =
+        `powershell -ExecutionPolicy Bypass -Command "irm '${base}/download-ui' -OutFile telemetry_ui.exe; Start-Process .\\telemetry_ui.exe"`;
+    document.getElementById('uninstallCmd').textContent =
+        `powershell -ExecutionPolicy Bypass -Command "irm '${base}/uninstall-script' | iex"`;
 
     // Version badge
     try {
@@ -1138,12 +1354,18 @@ async function initApp() {
     await Promise.all([fetchSidebarUsers(), fetchGroups()]);
     showView('home');
 
+    // Initial notification badge load (silent — don't open panel)
+    loadNotifications();
+
     setInterval(() => {
-        if (_activeView === 'home')       loadOverview();
-        if (_activeView === 'employees')  loadEmployees();
+        if (_activeView === 'home')       loadOverview(true);
+        if (_activeView === 'employees')  loadEmployees(true);
         if (_activeView === 'userDetail' && _currentUserId)  loadUserData();
         if (_activeView === 'group'      && _currentGroupId) loadGroupData();
     }, 60000);
+
+    // Refresh notification badge every 5 minutes
+    setInterval(loadNotifications, 300_000);
 }
 
 // ── View management ───────────────────────────────────────────────────────────────
@@ -1286,20 +1508,22 @@ async function selectGroup(groupId) {
 }
 
 // ── Overview (home) ───────────────────────────────────────────────────────────────
-async function loadOverview() {
+async function loadOverview(silent = false) {
     const date    = document.getElementById('overviewDatePicker').value;
     const loading = document.getElementById('overviewLoading');
     const tbody   = document.getElementById('overviewTableBody');
     const empty   = document.getElementById('overviewEmpty');
-    loading.classList.remove('hidden');
-    tbody.innerHTML = '';
-    empty.classList.add('hidden');
+    if (!silent) {
+        loading.classList.remove('hidden');
+        tbody.innerHTML = '';
+        empty.classList.add('hidden');
+    }
 
     try {
         const res   = await apiFetch(`${API_BASE}/users`);
         const users = await res.json();
 
-        if (!users.length) { empty.classList.remove('hidden'); loading.classList.add('hidden'); return; }
+        if (!users.length) { empty.classList.remove('hidden'); if (!silent) loading.classList.add('hidden'); return; }
 
         const rows = await Promise.all(users.map(async u => {
             try {
@@ -1331,7 +1555,7 @@ async function loadOverview() {
         // Render teams as rows with live stats
         const teamsGrid  = document.getElementById('dashTeamsGrid');
         const teamsEmpty = document.getElementById('dashTeamsEmpty');
-        teamsGrid.innerHTML = '';
+        const teamsFragment = document.createDocumentFragment();
         try {
             const grpRes = await apiFetch(`${API_BASE}/groups`);
             const groups = await grpRes.json();
@@ -1388,19 +1612,23 @@ async function loadOverview() {
                         <div class="shrink-0 text-indigo-400 group-hover:text-indigo-600 transition-colors">
                             <i data-lucide="chevron-right" class="w-5 h-5"></i>
                         </div>`;
-                    teamsGrid.appendChild(row);
+                    teamsFragment.appendChild(row);
                 });
+                teamsGrid.innerHTML = '';
+                teamsGrid.appendChild(teamsFragment);
                 lucide.createIcons({ nodes: [...teamsGrid.querySelectorAll('[data-lucide]')] });
             }
         } catch(e) { console.error('teams load:', e); }
 
+        const rowsFragment = document.createDocumentFragment();
         rows.forEach(r => {
             const score      = r.summary?.productivity_score ?? null;
             const activeTime = r.summary !== null ? (r.summary.total_active_time + r.summary.total_idle_time) : null;
             const displayName = aliasFor(r.username);
             const tr = document.createElement('tr');
-            tr.className = 'hover:bg-slate-50 transition-colors cursor-pointer';
-            tr.onclick   = () => selectUser(r.username);
+            tr.className     = 'hover:bg-slate-50 transition-colors cursor-pointer';
+            tr.dataset.user  = r.username;
+            tr.onclick       = () => selectUser(r.username);
             tr.innerHTML = `
                 <td class="px-6 py-4">
                     <div class="flex items-center gap-3">
@@ -1430,8 +1658,10 @@ async function loadOverview() {
                         <i data-lucide="more-vertical" class="w-4 h-4"></i>
                     </button>
                 </td>`;
-            tbody.appendChild(tr);
+            rowsFragment.appendChild(tr);
         });
+        tbody.innerHTML = '';
+        tbody.appendChild(rowsFragment);
     } catch (e) { if (e.message !== 'Session expired') console.error(e); }
     loading.classList.add('hidden');
 }
@@ -1439,13 +1669,15 @@ async function loadOverview() {
 // ── Employees view ────────────────────────────────────────────────────────────────
 let _empListData = [];
 
-async function loadEmployees() {
+async function loadEmployees(silent = false) {
     const today = getTodayDate();
     const grid  = document.getElementById('empGrid');
-    grid.innerHTML = `<div class="text-center py-12 text-slate-400">
-        <i data-lucide="loader-2" class="w-8 h-8 mx-auto mb-3 animate-spin text-slate-300"></i>
-        <p>Loading employees...</p></div>`;
-    lucide.createIcons({ nodes: [...grid.querySelectorAll('[data-lucide]')] });
+    if (!silent) {
+        grid.innerHTML = `<div class="text-center py-12 text-slate-400">
+            <i data-lucide="loader-2" class="w-8 h-8 mx-auto mb-3 animate-spin text-slate-300"></i>
+            <p>Loading employees...</p></div>`;
+        lucide.createIcons({ nodes: [...grid.querySelectorAll('[data-lucide]')] });
+    }
 
     try {
         const res   = await apiFetch(`${API_BASE}/users`);
@@ -2036,6 +2268,7 @@ async function loadGroupData() {
                 </td>`;
             tbody.appendChild(tr);
         });
+        lucide.createIcons({ nodes: [...tbody.querySelectorAll('[data-lucide]')] });
     } catch (e) { if (e.message !== 'Session expired') console.error(e); }
     loading.classList.add('hidden');
 }
@@ -2241,7 +2474,7 @@ async function submitDeleteGroup() {
 }
 
 // ── Settings page ─────────────────────────────────────────────────────────────────
-function loadSettings() {
+async function loadSettings() {
     const employees = _allEmployees;
     // Rename
     const renSel = document.getElementById('stRenameEmployee');
@@ -2262,6 +2495,17 @@ function loadSettings() {
     document.getElementById('stDeleteConfirm').value = '';
     document.getElementById('stDeleteConfirm').placeholder = '';
     stMsgClear('stDeleteMsg');
+    // Retention
+    try {
+        const res = await apiFetch(`${API_BASE}/settings`);
+        if (res.ok) {
+            const d = await res.json();
+            document.getElementById('stRetentionDays').value = d.retention_days ?? 90;
+            const lp = d.last_purge;
+            document.getElementById('stLastPurge').textContent = lp ? new Date(lp).toLocaleString() : 'Never';
+            _applyRetentionState(d.retention_enabled !== false);
+        }
+    } catch { /* non-fatal */ }
 }
 
 function stSyncMergeTargets() {
@@ -2582,6 +2826,203 @@ async function submitExport() {
         btn.disabled = false;
         document.getElementById('exportProgress').classList.add('hidden');
     }
+}
+
+// ── Notifications ─────────────────────────────────────────────────────────────────
+let _notifOpen    = false;
+let _notifDismiss = new Set(JSON.parse(localStorage.getItem('notifDismiss') || '[]'));
+
+async function loadNotifications() {
+    const list = document.getElementById('notifList');
+    try {
+        const res  = await apiFetch(`${API_BASE}/notifications`);
+        if (!res.ok) throw new Error('Failed');
+        const data = await res.json();
+
+        // Unread = not in dismiss set
+        const unread = data.filter(n => !_notifDismiss.has(n.id));
+        const badge  = document.getElementById('notifBadge');
+        if (unread.length > 0) {
+            badge.textContent = unread.length > 9 ? '9+' : String(unread.length);
+            badge.classList.remove('hidden');
+        } else {
+            badge.classList.add('hidden');
+        }
+
+        if (!data.length) {
+            list.innerHTML = '<p class="text-xs text-slate-400 text-center py-8">No notifications</p>';
+            return;
+        }
+
+        const colorMap = {
+            blue:   { bg: 'bg-blue-50',   icon: 'text-blue-500',   text: 'text-blue-700',   dot: 'bg-blue-400' },
+            yellow: { bg: 'bg-amber-50',  icon: 'text-amber-500',  text: 'text-amber-700',  dot: 'bg-amber-400' },
+        };
+        list.innerHTML = '';
+        data.forEach(n => {
+            const isRead = _notifDismiss.has(n.id);
+            const c      = colorMap[n.color] || colorMap.blue;
+            const time   = n.timestamp ? new Date(n.timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
+            const div    = document.createElement('div');
+            div.className = `flex gap-3 px-4 py-3 transition-colors ${isRead ? 'opacity-50' : c.bg}`;
+            div.innerHTML = `
+                <div class="mt-0.5 w-7 h-7 rounded-full ${isRead ? 'bg-slate-100' : c.bg} flex items-center justify-center shrink-0 border ${isRead ? 'border-slate-200' : 'border-transparent'}">
+                    <i data-lucide="${n.icon}" class="w-3.5 h-3.5 ${isRead ? 'text-slate-400' : c.icon}"></i>
+                </div>
+                <div class="flex-1 min-w-0">
+                    <p class="text-xs font-semibold ${isRead ? 'text-slate-400' : c.text}">${n.title}</p>
+                    <p class="text-xs text-slate-500 mt-0.5 leading-relaxed">${n.message}</p>
+                    <p class="text-[10px] text-slate-400 mt-1">${time}</p>
+                </div>
+                ${!isRead ? `<button onclick="dismissNotif('${n.id}')" class="shrink-0 mt-1 text-slate-300 hover:text-slate-500 transition-colors" title="Dismiss"><i data-lucide="x" class="w-3 h-3"></i></button>` : ''}`;
+            list.appendChild(div);
+        });
+        lucide.createIcons({ nodes: [...list.querySelectorAll('[data-lucide]')] });
+    } catch {
+        list.innerHTML = '<p class="text-xs text-rose-400 text-center py-8">Failed to load</p>';
+    }
+}
+
+function toggleNotifications() {
+    const panel = document.getElementById('notifPanel');
+    _notifOpen = !_notifOpen;
+    panel.classList.toggle('hidden', !_notifOpen);
+    if (_notifOpen) loadNotifications();
+}
+
+function dismissNotif(id) {
+    _notifDismiss.add(id);
+    localStorage.setItem('notifDismiss', JSON.stringify([..._notifDismiss]));
+    loadNotifications();
+}
+
+function markAllRead() {
+    const list = document.getElementById('notifList');
+    list.querySelectorAll('[data-notif-id]').forEach(el => _notifDismiss.add(el.dataset.notifId));
+    // Re-fetch to get IDs then dismiss all
+    apiFetch(`${API_BASE}/notifications`).then(r => r.json()).then(data => {
+        data.forEach(n => _notifDismiss.add(n.id));
+        localStorage.setItem('notifDismiss', JSON.stringify([..._notifDismiss]));
+        loadNotifications();
+    });
+}
+
+document.addEventListener('click', (e) => {
+    if (_notifOpen && !document.getElementById('notifPanel').contains(e.target)
+        && !document.getElementById('notifBellBtn').contains(e.target)) {
+        _notifOpen = false;
+        document.getElementById('notifPanel').classList.add('hidden');
+    }
+});
+
+// ── Agent page ────────────────────────────────────────────────────────────────────
+function switchAgentTab(tab) {
+    ['install','ui','uninstall'].forEach(t => {
+        const btn   = document.getElementById(`agentTab${t.charAt(0).toUpperCase()+t.slice(1)}`);
+        const panel = document.getElementById(`agentPanel${t.charAt(0).toUpperCase()+t.slice(1)}`);
+        const active = t === tab;
+        btn.classList.toggle('active', active);
+        panel.classList.toggle('hidden', !active);
+    });
+}
+
+function copyAgentCmd(codeId, btnId) {
+    const text = document.getElementById(codeId).textContent;
+    navigator.clipboard.writeText(text).then(() => {
+        const btn = document.getElementById(btnId);
+        const orig = btn.innerHTML;
+        btn.innerHTML = '<i data-lucide="check" class="w-4 h-4 text-emerald-400"></i>';
+        lucide.createIcons();
+        setTimeout(() => { btn.innerHTML = orig; lucide.createIcons(); }, 2000);
+    });
+}
+
+// ── Settings retention ────────────────────────────────────────────────────────────
+let _retentionEnabled = true;
+
+function _applyRetentionState(enabled) {
+    _retentionEnabled = enabled;
+    const toggle  = document.getElementById('stRetentionToggle');
+    const thumb   = document.getElementById('stRetentionToggleThumb');
+    const lbl     = document.getElementById('stRetentionToggleLbl');
+    const banner  = document.getElementById('stRetentionDisabledBanner');
+    const ctrls   = document.getElementById('stRetentionControls');
+    const saveBtn = document.getElementById('stRetentionSaveBtn');
+    const purgeBtn = document.getElementById('stPurgeBtn');
+
+    if (enabled) {
+        toggle.className  = 'toggle-on relative w-10 h-5 rounded-full transition-colors focus:outline-none';
+        thumb.className   = 'toggle-thumb absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform';
+        lbl.textContent   = 'Enabled';
+        lbl.className     = 'text-xs font-semibold text-blue-600';
+        banner.classList.add('hidden');
+        ctrls.classList.remove('opacity-40', 'pointer-events-none');
+        saveBtn.disabled  = false;
+        purgeBtn.disabled = false;
+    } else {
+        toggle.className  = 'toggle-off relative w-10 h-5 rounded-full transition-colors focus:outline-none';
+        thumb.className   = 'toggle-thumb absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform';
+        lbl.textContent   = 'Disabled';
+        lbl.className     = 'text-xs font-semibold text-slate-400';
+        banner.classList.remove('hidden');
+        ctrls.classList.add('opacity-40', 'pointer-events-none');
+        saveBtn.disabled  = true;
+        purgeBtn.disabled = true;
+    }
+    lucide.createIcons({ nodes: [banner] });
+}
+
+async function settingsToggleRetention() {
+    const newState = !_retentionEnabled;
+    stMsgClear('stRetentionMsg');
+    _applyRetentionState(newState); // optimistic UI
+    try {
+        const days = parseInt(document.getElementById('stRetentionDays').value, 10) || 90;
+        const res  = await apiFetch(`${API_BASE}/settings`, {
+            method: 'PUT',
+            body: JSON.stringify({ retention_days: days, retention_enabled: newState }),
+        });
+        if (!res.ok) { const d = await res.json().catch(()=>({})); throw new Error(d.detail || 'Failed'); }
+        const msg = newState ? 'Retention policy enabled.' : 'Retention policy disabled. Data will not be purged automatically.';
+        stMsgShow('stRetentionMsg', msg, false);
+    } catch (ex) {
+        _applyRetentionState(!newState); // revert on error
+        stMsgShow('stRetentionMsg', ex.message, true);
+    }
+}
+
+async function settingsSaveRetention() {
+    const btn  = document.getElementById('stRetentionSaveBtn');
+    const days = parseInt(document.getElementById('stRetentionDays').value, 10);
+    stMsgClear('stRetentionMsg');
+    if (!days || days < 1) return stMsgShow('stRetentionMsg', 'Enter a valid number of days (minimum 1).', true);
+    btn.disabled = true; btn.textContent = 'Saving...';
+    try {
+        const res = await apiFetch(`${API_BASE}/settings`, {
+            method: 'PUT',
+            body: JSON.stringify({ retention_days: days, retention_enabled: _retentionEnabled }),
+        });
+        if (!res.ok) { const d = await res.json().catch(()=>({})); throw new Error(d.detail || 'Save failed'); }
+        stMsgShow('stRetentionMsg', `Retention set to ${days} days.`, false);
+    } catch (ex) { stMsgShow('stRetentionMsg', ex.message, true); }
+    finally { btn.disabled = false; btn.textContent = 'Save'; }
+}
+
+async function settingsRunPurge() {
+    const btn = document.getElementById('stPurgeBtn');
+    stMsgClear('stRetentionMsg');
+    if (!confirm('This will permanently delete events older than the retention period. Continue?')) return;
+    btn.disabled = true; btn.textContent = 'Purging...';
+    try {
+        const res = await apiFetch(`${API_BASE}/purge-old-data`, { method: 'POST' });
+        if (!res.ok) { const d = await res.json().catch(()=>({})); throw new Error(d.detail || 'Purge failed'); }
+        const d = await res.json();
+        document.getElementById('stLastPurge').textContent = new Date(d.purged_at).toLocaleString();
+        stMsgShow('stRetentionMsg',
+            `Purge complete — ${d.deleted_events} event${d.deleted_events !== 1 ? 's' : ''} deleted (retention: ${d.retention_days} days).`,
+            false);
+    } catch (ex) { stMsgShow('stRetentionMsg', ex.message, true); }
+    finally { btn.disabled = false; btn.textContent = 'Purge Now'; }
 }
 
 // Close modals on backdrop click

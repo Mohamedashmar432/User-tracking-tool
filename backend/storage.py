@@ -27,6 +27,7 @@ calls, cutting network round-trips from N → ceil(N/100).
 import os
 import json
 import time
+from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -39,6 +40,7 @@ _LOG = logging.getLogger("telemetry.storage")
 
 RAW_TABLE        = "RawTelemetry"
 USER_INDEX_TABLE = "UserIndex"
+SETTINGS_TABLE   = "AgentSettings"
 
 
 # ── In-memory TTL cache ─────────────────────────────────────────────────────────
@@ -51,20 +53,28 @@ USER_INDEX_TABLE = "UserIndex"
 #   user list       → 5 minutes
 
 class _TTLCache:
-    def __init__(self):
-        self._store: Dict[str, Tuple[Any, float]] = {}
+    """LRU TTL cache with a bounded size to prevent unbounded memory growth."""
+
+    def __init__(self, maxsize: int = 512):
+        self._store: OrderedDict[str, Tuple[Any, float]] = OrderedDict()
+        self._maxsize = maxsize
 
     def get(self, key: str) -> Tuple[Optional[Any], bool]:
         """Returns (value, hit). Expired entries are evicted on access."""
-        entry = self._store.get(key)
-        if entry:
-            value, expires = entry
-            if time.monotonic() < expires:
-                return value, True
-            del self._store[key]
+        if key not in self._store:
+            return None, False
+        value, expires = self._store[key]
+        if time.monotonic() < expires:
+            self._store.move_to_end(key)
+            return value, True
+        del self._store[key]
         return None, False
 
     def set(self, key: str, value: Any, ttl: int) -> None:
+        if key in self._store:
+            del self._store[key]
+        elif len(self._store) >= self._maxsize:
+            self._store.popitem(last=False)  # evict LRU entry
         self._store[key] = (value, time.monotonic() + ttl)
 
     def invalidate(self, key: str) -> None:
@@ -131,6 +141,7 @@ class TelemetryStorage:
         self.service = TableServiceClient.from_connection_string(_resolve_conn_str())
         self.service.create_table_if_not_exists(RAW_TABLE)
         self.service.create_table_if_not_exists(USER_INDEX_TABLE)
+        self.service.create_table_if_not_exists(SETTINGS_TABLE)
 
     # ── Writes ────────────────────────────────────────────────────────────────
 
@@ -189,14 +200,26 @@ class TelemetryStorage:
             _cache.invalidate(f"raw:{user}:{date_str}")
         _cache.invalidate("users")
         _cache.invalidate("users_with_aliases")
+        _cache.invalidate("users_with_details")
 
-        # Keep UserIndex in sync — one row per user for O(1) listing
+        # Keep UserIndex in sync — one row per user for O(1) listing.
+        # Use merge-update (no read needed) to preserve existing created_at.
+        # On first ingest (ResourceNotFoundError) fall back to a full upsert.
         try:
-            index_table.upsert_entity({
-                "PartitionKey": "users",
-                "RowKey":       user,
-                "last_seen":    datetime.now(timezone.utc).isoformat(),
-            })
+            now_iso = datetime.now(timezone.utc).isoformat()
+            try:
+                index_table.update_entity({
+                    "PartitionKey": "users",
+                    "RowKey":       user,
+                    "last_seen":    now_iso,
+                }, mode="merge")
+            except ResourceNotFoundError:
+                index_table.upsert_entity({
+                    "PartitionKey": "users",
+                    "RowKey":       user,
+                    "last_seen":    now_iso,
+                    "created_at":   now_iso,
+                })
         except Exception:
             pass  # best-effort; don't fail the whole batch
 
@@ -235,6 +258,7 @@ class TelemetryStorage:
             _cache.invalidate(k)
         _cache.invalidate("users")
         _cache.invalidate("users_with_aliases")
+        _cache.invalidate("users_with_details")
 
         return deleted
 
@@ -471,7 +495,10 @@ class TelemetryStorage:
 
         table    = self.service.get_table_client(RAW_TABLE)
         pk       = f"{user}_{date}"
-        entities = table.query_entities(f"PartitionKey eq '{pk}'")
+        entities = table.query_entities(
+            f"PartitionKey eq '{pk}'",
+            select=["timestamp", "app", "domain", "active", "locked", "duration"],
+        )
 
         events: List[Dict[str, Any]] = []
         for e in entities:
@@ -530,6 +557,53 @@ class TelemetryStorage:
         _cache.set("users_with_aliases", result, 300)
         return result
 
+    # ── Per-user device key management ───────────────────────────────────────────
+    # Each device gets a unique key generated at install time.
+    # The key grants POST /ingest access + GET /api/me/* access for that user only.
+    # The admin key is NEVER stored on the device — only used once during registration.
+
+    def register_device_key(self, username: str, key: str) -> None:
+        """
+        Store a per-user agent key in UserIndex.
+        Called once during device install (admin-authenticated).
+        """
+        table = self.service.get_table_client(USER_INDEX_TABLE)
+        try:
+            entity = table.get_entity("users", username)
+        except ResourceNotFoundError:
+            entity = {"PartitionKey": "users", "RowKey": username}
+        entity["agent_key"] = key
+        table.upsert_entity(entity)
+        _cache.invalidate("device_keys")
+        _cache.invalidate("users")
+        _cache.invalidate("users_with_aliases")
+
+    def get_device_key_map(self) -> Dict[str, str]:
+        """
+        Returns {agent_key: username} for every registered device.
+        Cached for 5 minutes; invalidated on registration.
+        Used by auth layer to validate per-user keys on every request.
+        The cache ensures only one Table Storage scan per 5-minute window
+        regardless of how frequently agents POST to /ingest.
+        """
+        cached, hit = _cache.get("device_keys")
+        if hit:
+            return cached
+        table  = self.service.get_table_client(USER_INDEX_TABLE)
+        result: Dict[str, str] = {}
+        try:
+            for entity in table.query_entities(
+                "PartitionKey eq 'users'",
+                select=["RowKey", "agent_key"],
+            ):
+                key = entity.get("agent_key", "")
+                if key:
+                    result[key] = entity["RowKey"]
+        except Exception as exc:
+            _LOG.warning("device_key_map scan failed: %s", exc)
+        _cache.set("device_keys", result, 300)
+        return result
+
     def get_all_users(self) -> List[str]:
         """
         Sorted list of canonical usernames via UserIndex — O(users), not O(events).
@@ -544,3 +618,125 @@ class TelemetryStorage:
         users    = sorted(e["RowKey"] for e in entities)
         _cache.set("users", users, 300)
         return users
+
+    def get_users_with_details(self) -> List[Dict[str, Any]]:
+        """Return all users with created_at and last_seen timestamps. Cached 5 min."""
+        cached, hit = _cache.get("users_with_details")
+        if hit:
+            return cached
+        table = self.service.get_table_client(USER_INDEX_TABLE)
+        users = []
+        try:
+            for e in table.query_entities(
+                "PartitionKey eq 'users'",
+                select=["RowKey", "last_seen", "created_at"],
+            ):
+                users.append({
+                    "username":   e["RowKey"],
+                    "last_seen":  e.get("last_seen",  ""),
+                    "created_at": e.get("created_at", ""),
+                })
+        except Exception as exc:
+            _LOG.error("get_users_with_details failed: %s", exc)
+        _cache.set("users_with_details", users, 300)
+        return users
+
+    def get_oldest_data_date(self) -> Optional[str]:
+        """
+        Return the ISO date string of the oldest RawTelemetry row, or None.
+        Cached for 10 minutes — called by the notifications endpoint.
+        """
+        cached, hit = _cache.get("oldest_data_date")
+        if hit:
+            return cached
+        raw_table = self.service.get_table_client(RAW_TABLE)
+        oldest: Optional[str] = None
+        try:
+            for entity in raw_table.list_entities(select=["PartitionKey"]):
+                date_str = entity["PartitionKey"][-10:]
+                if len(date_str) == 10 and (oldest is None or date_str < oldest):
+                    oldest = date_str
+        except Exception as exc:
+            _LOG.error("get_oldest_data_date scan failed: %s", exc)
+        _cache.set("oldest_data_date", oldest, 600)
+        return oldest
+
+    # ── Global settings ───────────────────────────────────────────────────────────
+
+    def get_settings(self) -> Dict[str, Any]:
+        """Return the global settings row. Returns defaults if not yet configured."""
+        table = self.service.get_table_client(SETTINGS_TABLE)
+        try:
+            e = table.get_entity("global", "settings")
+            return {
+                "retention_enabled": bool(e.get("retention_enabled", True)),
+                "retention_days":    int(e.get("retention_days", 90)),
+                "last_purge":        e.get("last_purge", ""),
+            }
+        except ResourceNotFoundError:
+            return {"retention_enabled": True, "retention_days": 90, "last_purge": ""}
+
+    def save_settings(self, data: Dict[str, Any]) -> None:
+        """Persist settings. Only known fields are written."""
+        table = self.service.get_table_client(SETTINGS_TABLE)
+        entity = {
+            "PartitionKey":       "global",
+            "RowKey":             "settings",
+            "retention_enabled":  bool(data.get("retention_enabled", True)),
+            "retention_days":     int(data.get("retention_days", 90)),
+            "last_purge":         data.get("last_purge", ""),
+        }
+        table.upsert_entity(entity)
+
+    # ── Retention / purge ─────────────────────────────────────────────────────────
+
+    def purge_old_events(self, days: int) -> int:
+        """
+        Delete all RawTelemetry rows whose PartitionKey date is older than `days`.
+        PartitionKey format: {username}_{YYYY-MM-DD}
+
+        Strategy:
+          1. Page through all entities with select=[PartitionKey, RowKey].
+          2. Parse the date from the last segment of each PartitionKey.
+          3. Collect (PartitionKey, RowKey) pairs for rows older than cutoff.
+          4. Delete in batches of 100 (Azure Table batch limit).
+
+        Returns the number of deleted rows.
+        """
+        from datetime import date, timedelta
+        cutoff = (datetime.now(timezone.utc).date() - timedelta(days=days)).isoformat()
+
+        raw_table = self.service.get_table_client(RAW_TABLE)
+
+        # Collect stale entities grouped by PartitionKey for efficient batch deletes
+        stale: Dict[str, List[str]] = {}   # {pk: [rk, ...]}
+        try:
+            for entity in raw_table.list_entities(select=["PartitionKey", "RowKey"]):
+                pk = entity["PartitionKey"]
+                # PartitionKey = "username_YYYY-MM-DD" — date is the last 10 chars
+                date_part = pk[-10:]
+                if date_part < cutoff:   # strict: keep data from exactly retention_days ago
+                    stale.setdefault(pk, []).append(entity["RowKey"])
+        except Exception as exc:
+            _LOG.error("purge scan failed: %s", exc)
+            return 0
+
+        deleted = 0
+        for pk, row_keys in stale.items():
+            for i in range(0, len(row_keys), 100):
+                chunk = row_keys[i:i + 100]
+                ops   = [("delete", {"PartitionKey": pk, "RowKey": rk}) for rk in chunk]
+                try:
+                    _submit_with_retry(raw_table, ops)
+                    deleted += len(chunk)
+                except Exception as exc:
+                    _LOG.error("purge delete failed for pk=%s: %s", pk, exc)
+
+        # Record last purge timestamp
+        if deleted > 0 or True:   # always update last_purge so UI shows "never" correctly
+            settings = self.get_settings()
+            settings["last_purge"] = datetime.now(timezone.utc).isoformat()
+            self.save_settings(settings)
+
+        _LOG.info("purge_old_events: deleted %d rows older than %s", deleted, cutoff)
+        return deleted
