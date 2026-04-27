@@ -21,11 +21,15 @@ Build:
 
 from __future__ import annotations
 
+import ctypes
+import ctypes.wintypes
+import glob
 import json
 import math
 import os
 import queue
 import sys
+import tempfile
 import threading
 import time
 import tkinter as tk
@@ -59,6 +63,163 @@ _SERVER_BASE  = (_cfg.get("ingest_url", "") or "").replace("/ingest", "").rstrip
 _DEVICE_KEY   = _cfg.get("api_key", "")   # per-user device key — same key the agent uses for /ingest
 _AUTO_REFRESH = 30   # seconds between auto-refreshes
 # NOTE: no admin key is read or stored here — the device key is sufficient for /api/me/*
+
+# ── Windows DPAPI — decrypt backup files written by the agent ────────────────
+
+class _CryptBlob(ctypes.Structure):
+    _fields_ = [("cbData", ctypes.c_uint32), ("pbData", ctypes.POINTER(ctypes.c_byte))]
+
+
+def _dpapi_decrypt(ciphertext: bytes) -> bytes:
+    buf      = ctypes.create_string_buffer(ciphertext, len(ciphertext))
+    in_blob  = _CryptBlob(len(ciphertext), ctypes.cast(buf, ctypes.POINTER(ctypes.c_byte)))
+    out_blob = _CryptBlob()
+    ok = ctypes.windll.crypt32.CryptUnprotectData(
+        ctypes.byref(in_blob), None, None, None, None, 0, ctypes.byref(out_blob)
+    )
+    if not ok:
+        raise OSError(f"CryptUnprotectData failed (error {ctypes.GetLastError()})")
+    try:
+        return bytes(out_blob.pbData[:out_blob.cbData])
+    finally:
+        ctypes.windll.kernel32.LocalFree(out_blob.pbData)
+
+
+def _current_username() -> str:
+    return os.environ.get("USERNAME", "") or os.getlogin()
+
+
+def read_backup_events(date_str: str) -> list[dict]:
+    """
+    Read and decrypt all backup files the agent wrote for the given date.
+    Returns a flat list of raw event dicts (same shape as /ingest payload events).
+    Falls back gracefully — any unreadable file is skipped.
+    """
+    username = _current_username()
+    if not username:
+        return []
+    backup_dir = os.path.join(tempfile.gettempdir(), "telemetry_backup", username)
+    if not os.path.isdir(backup_dir):
+        return []
+
+    # date_str is YYYY-MM-DD; file timestamps are YYYYMMDDTHHMMSS…
+    date_prefix = date_str.replace("-", "")
+
+    events: list[dict] = []
+    files = sorted(
+        glob.glob(os.path.join(backup_dir, "batch_*.bin")) +
+        glob.glob(os.path.join(backup_dir, "batch_*.json"))
+    )
+    for fpath in files:
+        fname = os.path.basename(fpath)
+        # Filter to files whose timestamp prefix matches the requested date
+        # fname format: batch_20260422T143022123456.bin
+        if date_prefix not in fname:
+            continue
+        try:
+            if fpath.endswith(".bin"):
+                raw     = _dpapi_decrypt(open(fpath, "rb").read())
+                payload = json.loads(raw)
+            else:
+                with open(fpath, encoding="utf-8") as f:
+                    payload = json.load(f)
+            events.extend(payload.get("events", []))
+        except Exception:
+            continue
+    return events
+
+
+# ── Lightweight aggregation for local backup events ───────────────────────────
+# Mirrors just enough of backend/aggregator.py to populate the UI widgets.
+# No server required — operates purely on the raw event list.
+
+_UNPRODUCTIVE_KEYWORDS = {
+    "youtube", "netflix", "instagram", "facebook", "twitter", "x.com",
+    "tiktok", "snapchat", "reddit", "twitch", "prime video", "disney+",
+    "hbo max", "pinterest", "tumblr", "9gag", "imgur", "espn",
+    "steam store", "epic games store", "whatsapp", "telegram",
+    "spotify.exe", "steam.exe", "vlc.exe",
+}
+
+_PRODUCTIVE_APP_KEYWORDS = {
+    "code.exe", "cursor.exe", "devenv.exe", "pycharm", "idea", "rider",
+    "windowsterminal.exe", "powershell.exe", "pwsh.exe", "cmd.exe",
+    "postman.exe", "insomnia.exe", "dbeaver.exe", "docker",
+    "winword.exe", "excel.exe", "powerpnt.exe", "outlook.exe",
+    "teams.exe", "slack.exe", "zoom.exe", "notion.exe",
+}
+
+
+def _local_categorize(app: str, domain: str) -> str:
+    al = (app    or "").lower()
+    dl = (domain or "").lower()
+    if any(k in dl for k in _UNPRODUCTIVE_KEYWORDS):
+        return "Unproductive"
+    if any(k in al for k in _UNPRODUCTIVE_KEYWORDS):
+        return "Unproductive"
+    if any(k in al for k in _PRODUCTIVE_APP_KEYWORDS):
+        return "Productive"
+    return "Productive"   # benefit of the doubt
+
+
+def aggregate_backup(events: list[dict]) -> dict[str, Any]:
+    """
+    Produce summary + apps + hourly from raw backup events.
+    Returns same structure as build_display_data() expects.
+    """
+    total_active = total_idle = total_locked = prod_secs = 0
+    app_times: dict[str, int] = {}
+    app_cat:   dict[str, str] = {}
+    hourly = [0] * 24
+
+    for ev in events:
+        dur    = ev.get("duration", 0)
+        locked = ev.get("locked", False)
+        active = ev.get("active", False)
+        app    = ev.get("app", "Unknown")
+        domain = ev.get("domain", "")
+        cat    = _local_categorize(app, domain)
+
+        if active:
+            total_active += dur
+            app_times[app] = app_times.get(app, 0) + dur
+            app_cat[app]   = cat
+            if cat == "Productive":
+                prod_secs += dur
+            try:
+                ts = datetime.fromisoformat(ev["timestamp"]).astimezone()
+                hourly[ts.hour] = min(hourly[ts.hour] + dur, 3600)
+            except Exception:
+                pass
+        elif locked:
+            total_locked += dur
+        else:
+            total_idle += dur
+
+    top_app = max(app_times, key=app_times.get) if app_times else "—"
+    score   = round(prod_secs / total_active * 100, 1) if total_active else 0.0
+
+    apps = sorted(
+        [{"app": a, "time": t, "category": app_cat[a]} for a, t in app_times.items()],
+        key=lambda x: x["time"], reverse=True,
+    )
+    prod_secs_total   = sum(a["time"] for a in apps if a["category"] == "Productive")
+    unprod_secs_total = sum(a["time"] for a in apps if a["category"] == "Unproductive")
+
+    return {
+        "summary": {
+            "total_active_time":     total_active,
+            "total_idle_time":       total_idle,
+            "total_screen_off_time": total_locked,
+            "productivity_score":    score,
+            "top_app":               top_app,
+        },
+        "apps":        apps,
+        "prod_secs":   prod_secs_total,
+        "unprod_secs": unprod_secs_total,
+        "hourly":      hourly,
+    }
+
 
 # ── Thread-safe message queue (tray thread → tkinter main thread) ────────────
 _ui_queue: queue.Queue = queue.Queue()
@@ -137,6 +298,7 @@ def build_display_data(date_str: str | None = None) -> dict[str, Any]:
 
     status, cache = (read_local() if is_today else (None, None))
     summary, apps, timeline = fetch_server(date_str)
+    server_ok = summary is not None and bool(_SERVER_BASE)
 
     # ── Live status (today only) ───────────────────────────────────────────
     if is_today:
@@ -155,34 +317,46 @@ def build_display_data(date_str: str | None = None) -> dict[str, Any]:
         status_label, status_color = "Historical", MUTED
         status_ts = ""
 
-    # ── Summary (server preferred; cache fallback only for today) ──────────
+    # ── Summary (server → cache → backup) ─────────────────────────────────
+    backup_agg = None
     if summary is None and is_today and cache:
         summary = cache.get("summary")
+    if summary is None:
+        # Server down and no cache — try local encrypted backup files
+        backup_events = read_backup_events(date_str)
+        if backup_events:
+            backup_agg = aggregate_backup(backup_events)
+            summary    = backup_agg["summary"]
 
     active_secs = (summary or {}).get("total_active_time", 0)
     idle_secs   = (summary or {}).get("total_idle_time",   0)
     score       = (summary or {}).get("productivity_score", 0.0)
     top_app     = (summary or {}).get("top_app", "—")
 
-    # ── Top apps (server preferred; cache fallback only for today) ─────────
+    # ── Top apps (server → cache → backup) ────────────────────────────────
     if not apps and is_today and cache:
         apps = cache.get("top_apps", [])
+    if not apps and backup_agg:
+        apps = backup_agg["apps"]
 
-    prod_secs   = sum(a.get("time", 0) for a in apps if a.get("category") == "Productive")
-    unprod_secs = sum(a.get("time", 0) for a in apps if a.get("category") == "Unproductive")
+    prod_secs   = backup_agg["prod_secs"]   if backup_agg and not server_ok else \
+                  sum(a.get("time", 0) for a in apps if a.get("category") == "Productive")
+    unprod_secs = backup_agg["unprod_secs"] if backup_agg and not server_ok else \
+                  sum(a.get("time", 0) for a in apps if a.get("category") == "Unproductive")
 
-    # ── Hourly activity ────────────────────────────────────────────────────
+    # ── Hourly activity (server timeline → cache → backup) ─────────────────
     if timeline:
         hourly = _timeline_to_hourly(timeline)
     elif is_today and cache:
         hourly = cache.get("hourly_active", [0] * 24)
+    elif backup_agg:
+        hourly = backup_agg["hourly"]
     else:
         hourly = [0] * 24
 
     # ── Last-updated label ─────────────────────────────────────────────────
-    server_ok = summary is not None and bool(_SERVER_BASE)
     if not is_today:
-        last_updated = f"Server — {date_str}"
+        last_updated = f"Server — {date_str}" if server_ok else f"No server data — {date_str}"
     elif server_ok:
         last_updated = f"Server  {datetime.now().strftime('%H:%M:%S')}"
     elif status_ts:
@@ -191,6 +365,8 @@ def build_display_data(date_str: str | None = None) -> dict[str, Any]:
             last_updated = f"Local cache  {ts.strftime('%H:%M:%S')}"
         except Exception:
             last_updated = "Local cache"
+    elif backup_agg:
+        last_updated = f"Local backup  {datetime.now().strftime('%H:%M:%S')}"
     else:
         last_updated = "No data"
 

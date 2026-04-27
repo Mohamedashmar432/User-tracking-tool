@@ -57,7 +57,7 @@ from .users     import UserStorage
 from .groups    import GroupStorage
 
 # ── Version ──────────────────────────────────────────────────────────────────────
-APP_VERSION = "2.8"
+APP_VERSION = "2.9"
 STARTED_AT  = datetime.now(timezone.utc).isoformat()
 
 # ── App setup ───────────────────────────────────────────────────────────────────
@@ -215,6 +215,7 @@ async def get_notifications(_: dict = Depends(require_admin)):
     today      = datetime.now(timezone.utc).date()
     now_iso    = datetime.now(timezone.utc).isoformat()
     notifs     = []
+    users      = []
 
     # ── New user notifications (onboarded in last 14 days) ────────────────
     try:
@@ -243,6 +244,34 @@ async def get_notifications(_: dict = Depends(require_admin)):
                 pass
     except Exception as exc:
         _LOG.warning("notifications: user fetch failed: %s", exc)
+
+    # ── Inactive agent notifications (no data for 3+ days) ───────────────
+    INACTIVE_THRESHOLD_DAYS = 3
+    try:
+        for u in users:
+            last_seen_str = u.get("last_seen", "")
+            if not last_seen_str:
+                continue
+            try:
+                last_seen_date = datetime.fromisoformat(
+                    last_seen_str.replace("Z", "+00:00")
+                ).date()
+                days_inactive = (today - last_seen_date).days
+                if days_inactive >= INACTIVE_THRESHOLD_DAYS:
+                    label = f"{days_inactive} day{'s' if days_inactive != 1 else ''}"
+                    notifs.append({
+                        "id":        f"inactive_{u['username']}",
+                        "type":      "agent_inactive",
+                        "title":     "Agent inactive",
+                        "message":   f"{u['username']} has not sent data for {label}",
+                        "timestamp": now_iso,
+                        "icon":      "wifi-off",
+                        "color":     "red",
+                    })
+            except Exception:
+                pass
+    except Exception as exc:
+        _LOG.warning("notifications: inactive agent check failed: %s", exc)
 
     # ── Retention warnings (oldest data within 5 days of purge cutoff) ───
     try:

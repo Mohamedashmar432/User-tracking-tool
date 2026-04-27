@@ -15,10 +15,22 @@ local.settings.json
 # Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 .venv/
 func-venv/
 
 # PyInstaller build artifacts
 build/
+dist/
 
+# Scripts with secrets / machine-specific config
 deploy.ps1
+uninstall-agent.ps1
+
+# VS Code workspace settings (machine-specific)
+.vscode/
+
+# Legacy / scratch files
+server.py
+migrate.py

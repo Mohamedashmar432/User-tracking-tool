@@ -122,7 +122,7 @@ TICK_INTERVAL     = _cfg.get("tick_interval",    5)   # seconds
 LOG_INTERVAL      = _cfg.get("log_interval",    30)   # seconds — 30s balances granularity vs storage cost
 BATCH_SIZE        = _cfg.get("batch_size",      10)   # safety cap: flush if buffer reaches this
 FLUSH_INTERVAL    = _cfg.get("flush_interval",  60)   # seconds — 60s + flush-on-app-switch keeps lag < 60s
-MAX_BACKUP_EVENTS = 100   # max events persisted to disk when server is unreachable
+MAX_BACKUP_EVENTS = 500   # ~6 days of average usage; oldest events evicted when exceeded
 
 LOG_FILE      = os.path.join(tempfile.gettempdir(), "TelemetryAgent", "logs.txt")
 MAX_LOG_SIZE  = 10 * 1024 * 1024   # 10 MB
@@ -380,6 +380,45 @@ def get_idle_seconds() -> int:
         return 0
 
 
+# ── Windows DPAPI — user-bound encryption for backup files ──────────────────────
+# CryptProtectData binds the ciphertext to the current Windows user account.
+# Only the same user (same Windows profile / domain credential) can decrypt.
+# Uses crypt32.dll which ships on every Windows version — no extra dependencies.
+
+class _CryptBlob(ctypes.Structure):
+    _fields_ = [("cbData", ctypes.c_uint32), ("pbData", ctypes.POINTER(ctypes.c_byte))]
+
+
+def _dpapi_encrypt(plaintext: bytes) -> bytes:
+    buf      = ctypes.create_string_buffer(plaintext, len(plaintext))
+    in_blob  = _CryptBlob(len(plaintext), ctypes.cast(buf, ctypes.POINTER(ctypes.c_byte)))
+    out_blob = _CryptBlob()
+    ok = ctypes.windll.crypt32.CryptProtectData(
+        ctypes.byref(in_blob), None, None, None, None, 0, ctypes.byref(out_blob)
+    )
+    if not ok:
+        raise OSError(f"CryptProtectData failed (error {ctypes.GetLastError()})")
+    try:
+        return bytes(out_blob.pbData[:out_blob.cbData])
+    finally:
+        ctypes.windll.kernel32.LocalFree(out_blob.pbData)
+
+
+def _dpapi_decrypt(ciphertext: bytes) -> bytes:
+    buf      = ctypes.create_string_buffer(ciphertext, len(ciphertext))
+    in_blob  = _CryptBlob(len(ciphertext), ctypes.cast(buf, ctypes.POINTER(ctypes.c_byte)))
+    out_blob = _CryptBlob()
+    ok = ctypes.windll.crypt32.CryptUnprotectData(
+        ctypes.byref(in_blob), None, None, None, None, 0, ctypes.byref(out_blob)
+    )
+    if not ok:
+        raise OSError(f"CryptUnprotectData failed (error {ctypes.GetLastError()})")
+    try:
+        return bytes(out_blob.pbData[:out_blob.cbData])
+    finally:
+        ctypes.windll.kernel32.LocalFree(out_blob.pbData)
+
+
 LOCK_SCREEN_PROCESSES = frozenset({"lockapp.exe", "logonui.exe"})
 
 
@@ -480,13 +519,28 @@ def rotate_logs():
 
 def _backup_dir(username: str) -> str:
     path = os.path.join(tempfile.gettempdir(), "telemetry_backup", username)
+    already_exists = os.path.isdir(path)
     os.makedirs(path, exist_ok=True)
+    if not already_exists:
+        # Restrict permissions once on first creation — no need to repeat every call.
+        try:
+            subprocess.call(
+                ["icacls", path, "/inheritance:r", "/grant:r", f"{username}:(OI)(CI)F"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+        except Exception:
+            pass
     return path
 
 
 def _backup_files(username: str) -> list:
-    """Sorted list of backup file paths, oldest first."""
-    return sorted(glob.glob(os.path.join(_backup_dir(username), "batch_*.json")))
+    """Sorted list of backup file paths (encrypted .bin + legacy .json), oldest first."""
+    d = _backup_dir(username)
+    return sorted(
+        glob.glob(os.path.join(d, "batch_*.bin")) +
+        glob.glob(os.path.join(d, "batch_*.json"))
+    )
 
 
 def save_to_backup(username: str, device: str, events: list) -> None:
@@ -504,8 +558,12 @@ def save_to_backup(username: str, device: str, events: list) -> None:
     counts = []
     for fpath in files:
         try:
-            with open(fpath, encoding="utf-8") as fh:
-                n = len(json.load(fh).get("events", []))
+            if fpath.endswith(".bin"):
+                raw = _dpapi_decrypt(open(fpath, "rb").read())
+                n = len(json.loads(raw).get("events", []))
+            else:
+                with open(fpath, encoding="utf-8") as fh:
+                    n = len(json.load(fh).get("events", []))
         except Exception:
             n = 0
         total += n
@@ -522,10 +580,12 @@ def save_to_backup(username: str, device: str, events: list) -> None:
             pass
 
     ts    = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")
-    fpath = os.path.join(_backup_dir(username), f"batch_{ts}.json")
+    fpath = os.path.join(_backup_dir(username), f"batch_{ts}.bin")
     try:
-        with open(fpath, "w", encoding="utf-8") as f:
-            json.dump({"user": username, "device": device, "events": events}, f)
+        raw   = json.dumps({"user": username, "device": device, "events": events}).encode()
+        cipher = _dpapi_encrypt(raw)
+        with open(fpath, "wb") as f:
+            f.write(cipher)
         print(f"  [backup] {len(events)} events saved offline → {fpath}")
     except Exception as e:
         print(f"  [backup] Disk write failed: {e}")
@@ -544,8 +604,12 @@ def flush_backup(username: str, device: str) -> int:
     recovered = 0
     for fpath in files:
         try:
-            with open(fpath, encoding="utf-8") as f:
-                payload = json.load(f)
+            if fpath.endswith(".bin"):
+                raw     = _dpapi_decrypt(open(fpath, "rb").read())
+                payload = json.loads(raw)
+            else:
+                with open(fpath, encoding="utf-8") as f:
+                    payload = json.load(f)
         except Exception as e:
             print(f"  [backup] Skipping unreadable file {os.path.basename(fpath)}: {e}")
             continue
@@ -680,12 +744,15 @@ def flush_batch(user: str, device: str, batch: list) -> bool:
     """
     if not batch:
         return True
+    if INGEST_URL.startswith("http://") and getattr(sys, "frozen", False):
+        _LOG.warning("Security: ingest URL uses plaintext HTTP — telemetry data is unencrypted in transit")
     try:
         resp = requests.post(
             INGEST_URL,
             json={"user": user, "device": device, "events": batch},
             headers={"X-API-Key": AGENT_API_KEY},
             timeout=10,
+            verify=True,
         )
         if resp.status_code in (200, 202):
             data = resp.json()
@@ -718,7 +785,7 @@ def check_connection(retries: int = 3, delay: int = 5) -> bool:
     health_url = _base_url() + "/api/health"
     for attempt in range(1, retries + 1):
         try:
-            resp = requests.get(health_url, timeout=10)
+            resp = requests.get(health_url, timeout=10, verify=True)
             if resp.status_code == 200:
                 _LOG.info("Connected to server successfully (%s)", health_url)
                 return True
@@ -764,7 +831,7 @@ def _do_update(download_url: str, current_exe: str) -> None:
 
     _LOG.info("Auto-update: downloading new EXE from %s", download_url)
     try:
-        with requests.get(download_url, stream=True, timeout=60) as r:
+        with requests.get(download_url, stream=True, timeout=60, verify=True) as r:
             r.raise_for_status()
             with open(tmp_exe, "wb") as f:
                 for chunk in r.iter_content(chunk_size=65536):
@@ -850,7 +917,8 @@ def _register_scheduled_task(exe_path: str) -> bool:
         "/f",                  # overwrite if already exists
     ]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30,
+                                creationflags=subprocess.CREATE_NO_WINDOW)
         if result.returncode == 0:
             return True
         _LOG.debug("schtasks stderr: %s", result.stderr.strip())
@@ -1027,6 +1095,7 @@ def uninstall() -> None:
         subprocess.call(
             ["schtasks", "/delete", "/tn", "TelemetryAgent", "/f"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NO_WINDOW,
         )
         _LOG.info("  Scheduled task removed")
     except Exception as e:
