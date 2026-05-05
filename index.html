@@ -617,8 +617,7 @@
             <div class="flex gap-1 bg-slate-100 p-1 rounded-xl w-fit">
                 <button id="agentTabInstall"   onclick="switchAgentTab('install')"   class="agent-tab active px-4 py-1.5 rounded-lg text-sm font-semibold transition-all">Full Install</button>
                 <button id="agentTabUi"        onclick="switchAgentTab('ui')"        class="agent-tab px-4 py-1.5 rounded-lg text-sm font-semibold transition-all">UI Companion</button>
-                <button id="agentTabMigrate"   onclick="switchAgentTab('migrate')"   class="agent-tab px-4 py-1.5 rounded-lg text-sm font-semibold transition-all">Migrate</button>
-                <button id="agentTabUninstall" onclick="switchAgentTab('uninstall')" class="agent-tab px-4 py-1.5 rounded-lg text-sm font-semibold transition-all">Uninstall</button>
+<button id="agentTabUninstall" onclick="switchAgentTab('uninstall')" class="agent-tab px-4 py-1.5 rounded-lg text-sm font-semibold transition-all">Uninstall</button>
             </div>
 
             <!-- ── Tab: Install Agent ── -->
@@ -773,48 +772,6 @@
                             <div class="flex gap-3"><span class="shrink-0 w-5 h-5 rounded-full bg-purple-100 text-purple-600 text-xs font-bold flex items-center justify-center mt-0.5">✓</span><div><p class="font-medium text-slate-700">Offline-first</p><p class="text-xs text-slate-400 mt-0.5">Today's data from local cache with &lt; 5 s lag; server enriches when reachable</p></div></div>
                             <div class="flex gap-3"><span class="shrink-0 w-5 h-5 rounded-full bg-purple-100 text-purple-600 text-xs font-bold flex items-center justify-center mt-0.5">✓</span><div><p class="font-medium text-slate-700">Top apps list</p><p class="text-xs text-slate-400 mt-0.5">Ranked by time spent, colour-coded by productivity category</p></div></div>
                         </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- ── Tab: Migrate ── -->
-            <div id="agentPanelMigrate" class="space-y-5 hidden">
-                <div class="grid grid-cols-3 gap-4">
-                    <div class="bg-white rounded-2xl border border-amber-100 p-5 shadow-sm">
-                        <div class="w-8 h-8 bg-amber-100 rounded-xl flex items-center justify-center text-amber-600 mb-3"><i data-lucide="zap" class="w-4 h-4"></i></div>
-                        <h4 class="font-semibold text-slate-800 text-sm">1. Kills old agent</h4>
-                        <p class="text-xs text-slate-400 mt-1 leading-relaxed">Detects and force-stops any running telemetry process regardless of version or install location</p>
-                    </div>
-                    <div class="bg-white rounded-2xl border border-amber-100 p-5 shadow-sm">
-                        <div class="w-8 h-8 bg-amber-100 rounded-xl flex items-center justify-center text-amber-600 mb-3"><i data-lucide="trash-2" class="w-4 h-4"></i></div>
-                        <h4 class="font-semibold text-slate-800 text-sm">2. Wipes old install</h4>
-                        <p class="text-xs text-slate-400 mt-1 leading-relaxed">Removes all old dirs, scheduled tasks, and stale Defender exclusions before installing fresh</p>
-                    </div>
-                    <div class="bg-white rounded-2xl border border-emerald-100 p-5 shadow-sm">
-                        <div class="w-8 h-8 bg-emerald-100 rounded-xl flex items-center justify-center text-emerald-600 mb-3"><i data-lucide="refresh-cw" class="w-4 h-4"></i></div>
-                        <h4 class="font-semibold text-slate-800 text-sm">3. Clean reinstall</h4>
-                        <p class="text-xs text-slate-400 mt-1 leading-relaxed">Downloads and installs latest agent + UI companion exactly like a fresh install</p>
-                    </div>
-                </div>
-
-                <div class="bg-white rounded-3xl border border-amber-200 shadow-sm p-6">
-                    <div class="flex items-center gap-3 mb-4">
-                        <div class="bg-amber-500 p-2.5 rounded-xl"><i data-lucide="terminal" class="w-4 h-4 text-white"></i></div>
-                        <div>
-                            <h3 class="font-bold text-slate-800">Migration Script</h3>
-                            <p class="text-xs text-slate-400 mt-0.5">Run on machines with an old or broken agent — safe to run even if no agent is installed</p>
-                        </div>
-                    </div>
-                    <div class="flex items-center gap-3 bg-slate-900 rounded-2xl px-5 py-4 mb-4">
-                        <i data-lucide="chevron-right" class="w-4 h-4 text-slate-500 shrink-0"></i>
-                        <code id="migrateCmd" class="flex-1 text-sm text-amber-400 font-mono break-all">Loading...</code>
-                        <button id="copyMigrateBtn" onclick="copyAgentCmd('migrateCmd','copyMigrateBtn')" class="shrink-0 p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700 transition-all" title="Copy">
-                            <i data-lucide="copy" class="w-4 h-4"></i>
-                        </button>
-                    </div>
-                    <div class="flex items-start gap-3 bg-amber-50 border border-amber-100 rounded-2xl px-4 py-3">
-                        <i data-lucide="info" class="w-4 h-4 text-amber-600 shrink-0 mt-0.5"></i>
-                        <p class="text-xs text-amber-700 leading-relaxed">Use this when an employee already has an old agent running. It kills the old process, removes all files, then installs the latest version cleanly. Cloud data is never touched.</p>
                     </div>
                 </div>
             </div>
@@ -1554,13 +1511,11 @@ async function initApp() {
     document.getElementById('scriptDownloadBtn').href = `${base}/install-script`;
     document.getElementById('uiDownloadBtn').href     = `${base}/download-ui`;
     document.getElementById('installCmd').textContent =
-        `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "irm '${base}/install-script' | iex"`;
+        `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "iwr '${base}/install-script' -OutFile ([IO.Path]::GetTempPath()+'pa_install.ps1') -UseBasicParsing; & ([IO.Path]::GetTempPath()+'pa_install.ps1')"`;
     document.getElementById('uiInstallCmd').textContent =
-        `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "irm '${base}/download-ui' -OutFile telemetry_ui.exe; Start-Process .\\telemetry_ui.exe"`;
+        `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "iwr '${base}/download-ui' -OutFile ([IO.Path]::GetTempPath()+'telemetry_ui.zip') -UseBasicParsing; Expand-Archive ([IO.Path]::GetTempPath()+'telemetry_ui.zip') -DestinationPath ([IO.Path]::GetTempPath()+'telemetry_ui') -Force; Start-Process ([IO.Path]::GetTempPath()+'telemetry_ui\\telemetry_ui.exe')"`;
     document.getElementById('uninstallCmd').textContent =
-        `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "irm '${base}/uninstall-script' | iex"`;
-    document.getElementById('migrateCmd').textContent =
-        `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "irm '${base}/migrate-script' | iex"`;
+        `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "iwr '${base}/uninstall-script' -OutFile ([IO.Path]::GetTempPath()+'pa_uninstall.ps1') -UseBasicParsing; & ([IO.Path]::GetTempPath()+'pa_uninstall.ps1')"`;
 
     // Version badge
     try {
@@ -3995,7 +3950,7 @@ document.addEventListener('click', (e) => {
 
 // ── Agent page ────────────────────────────────────────────────────────────────────
 function switchAgentTab(tab) {
-    ['install','ui','migrate','uninstall'].forEach(t => {
+    ['install','ui','uninstall'].forEach(t => {
         const btn   = document.getElementById(`agentTab${t.charAt(0).toUpperCase()+t.slice(1)}`);
         const panel = document.getElementById(`agentPanel${t.charAt(0).toUpperCase()+t.slice(1)}`);
         const active = t === tab;

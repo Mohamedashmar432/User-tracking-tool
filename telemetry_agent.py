@@ -116,7 +116,7 @@ _cfg = _load_config()
 # ── Configuration ───────────────────────────────────────────────────────────────
 
 IDLE_THRESHOLD    = _cfg.get("idle_threshold",  300)  # seconds
-AGENT_VERSION     = "2.9"   # bump this before every EXE build
+AGENT_VERSION     = "3.0"   # bump this before every EXE build
 
 TICK_INTERVAL     = _cfg.get("tick_interval",    5)   # seconds
 LOG_INTERVAL      = _cfg.get("log_interval",    30)   # seconds — 30s balances granularity vs storage cost

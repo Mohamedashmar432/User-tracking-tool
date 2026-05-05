@@ -18,7 +18,8 @@ from .auth    import AGENT_KEY
 
 _LOG = logging.getLogger("telemetry.api")
 
-APP_VERSION = "2.9"
+APP_VERSION = "3.0"
+
 STARTED_AT  = datetime.now(timezone.utc).isoformat()
 
 storage       = TelemetryStorage()
