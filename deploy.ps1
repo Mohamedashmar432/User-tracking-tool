@@ -53,9 +53,11 @@ if ($ADMIN_API_KEY)  { $settings += "ADMIN_API_KEY=$ADMIN_API_KEY" }
 if ($JWT_SECRET)     { $settings += "JWT_SECRET=$JWT_SECRET" }
 if ($ADMIN_PASSWORD) { $settings += "ADMIN_PASSWORD=$ADMIN_PASSWORD" }
 
-# Build AGENT_DOWNLOAD_URL from storage account + container
-$agentBlobUrl = "https://$STORAGE_ACCOUNT.blob.core.windows.net/$BLOB_CONTAINER/telemetry_agent.exe"
-$settings += "AGENT_DOWNLOAD_URL=$agentBlobUrl"
+# Blob URLs for agent ZIP and UI ZIP
+$agentZipUrl = "https://$STORAGE_ACCOUNT.blob.core.windows.net/$BLOB_CONTAINER/telemetry_agent.zip"
+$uiZipUrl    = "https://$STORAGE_ACCOUNT.blob.core.windows.net/$BLOB_CONTAINER/telemetry_ui.zip"
+$settings += "AGENT_DOWNLOAD_URL=$agentZipUrl"
+$settings += "UI_DOWNLOAD_URL=$uiZipUrl"
 
 az webapp config appsettings set `
     --name $APP_NAME `
@@ -65,33 +67,47 @@ az webapp config appsettings set `
 Write-Host "      OK" -ForegroundColor Green
 
 # ── 3. Deploy code ────────────────────────────────────────────────────────────
-Write-Host "[3/4] Deploying code (az webapp up)..." -ForegroundColor Cyan
+Write-Host "[3/5] Deploying code (az webapp up)..." -ForegroundColor Cyan
 az webapp up --name $APP_NAME --resource-group $RESOURCE_GROUP --runtime "PYTHON:3.11"
 Write-Host "      OK" -ForegroundColor Green
 
-# ── 4. Upload agent EXE (if built) ───────────────────────────────────────────
-$exePath = "dist\telemetry_agent.exe"
-if (Test-Path $exePath) {
-    Write-Host "[4/4] Uploading agent EXE to Blob Storage..." -ForegroundColor Cyan
-
-    # Ensure the container exists
+# ── 4. Upload agent ZIP ───────────────────────────────────────────────────────
+$agentZipPath = "dist\telemetry_agent.zip"
+if (Test-Path $agentZipPath) {
+    Write-Host "[4/5] Uploading agent ZIP to Blob Storage..." -ForegroundColor Cyan
     az storage container create `
         --name $BLOB_CONTAINER `
         --account-name $STORAGE_ACCOUNT `
         --public-access blob `
         --output none
-
     az storage blob upload `
         --account-name $STORAGE_ACCOUNT `
         --container-name $BLOB_CONTAINER `
-        --name "telemetry_agent.exe" `
-        --file $exePath `
+        --name "telemetry_agent.zip" `
+        --file $agentZipPath `
         --overwrite `
         --output none
-    Write-Host "      Uploaded: $agentBlobUrl" -ForegroundColor Green
+    Write-Host "      Uploaded: $agentZipUrl" -ForegroundColor Green
 } else {
-    Write-Host "[4/4] Skipping EXE upload — dist\telemetry_agent.exe not found." -ForegroundColor Yellow
-    Write-Host "      Build it first: user-track\Scripts\pyinstaller.exe telemetry_agent.spec" -ForegroundColor Yellow
+    Write-Host "[4/5] Skipping agent upload — dist\telemetry_agent.zip not found." -ForegroundColor Yellow
+    Write-Host "      Build first: .\build.ps1" -ForegroundColor Yellow
+}
+
+# ── 5. Upload UI ZIP ──────────────────────────────────────────────────────────
+$uiZipPath = "dist\telemetry_ui.zip"
+if (Test-Path $uiZipPath) {
+    Write-Host "[5/5] Uploading UI ZIP to Blob Storage..." -ForegroundColor Cyan
+    az storage blob upload `
+        --account-name $STORAGE_ACCOUNT `
+        --container-name $BLOB_CONTAINER `
+        --name "telemetry_ui.zip" `
+        --file $uiZipPath `
+        --overwrite `
+        --output none
+    Write-Host "      Uploaded: $uiZipUrl" -ForegroundColor Green
+} else {
+    Write-Host "[5/5] Skipping UI upload — dist\telemetry_ui.zip not found." -ForegroundColor Yellow
+    Write-Host "      Build first: .\build.ps1" -ForegroundColor Yellow
 }
 
 Write-Host ""

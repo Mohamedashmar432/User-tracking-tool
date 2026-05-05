@@ -1,53 +1,48 @@
 """
-telemetry_ui.py — Lightweight Windows system-tray UI companion for TelemetryAgent.
+telemetry_ui.py — Windows system-tray UI companion for TelemetryAgent.
 
 Architecture
 ------------
   Agent (telemetry_agent.exe)
-    └─ writes  C:\\ProgramData\\TelemetryAgent\\status.json   every ~5 s  (current state)
-    └─ writes  C:\\ProgramData\\TelemetryAgent\\cache.json    every ~15 s (daily summary)
+    └─ writes  C:\\ProgramData\\TelemetryAgent\\status.json   every ~5 s
+    └─ writes  C:\\ProgramData\\TelemetryAgent\\cache.json    every ~15 s
 
   This process (telemetry_ui.exe)
     └─ reads status.json + cache.json  → primary data source (works offline)
-    └─ calls server /api/*             → richer data when reachable
+    └─ calls server /api/me/*          → richer data when reachable
     └─ shows system-tray icon + popup window
 
-Dependencies (install in the build venv):
+Dependencies:
     pip install pystray pillow requests
-
-Build:
-    pyinstaller telemetry_ui.spec
 """
 
 from __future__ import annotations
 
-import ctypes
-import ctypes.wintypes
 import glob
 import json
-import math
 import os
 import queue
+import subprocess
 import sys
 import tempfile
 import threading
 import time
 import tkinter as tk
-from datetime import datetime, timezone
-from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pystray
 import requests
 from PIL import Image, ImageDraw
 
-# ── Paths (shared with agent) ────────────────────────────────────────────────
+# ── Paths ─────────────────────────────────────────────────────────────────────
 PROGRAM_DATA = r"C:\ProgramData\TelemetryAgent"
 STATUS_PATH  = os.path.join(PROGRAM_DATA, "status.json")
 CACHE_PATH   = os.path.join(PROGRAM_DATA, "cache.json")
 CONFIG_PATH  = os.path.join(PROGRAM_DATA, "config.json")
 
-# ── Config ───────────────────────────────────────────────────────────────────
+# ── Config ────────────────────────────────────────────────────────────────────
 def _load_config() -> dict:
     for path in [CONFIG_PATH,
                  os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent.config.json")]:
@@ -58,81 +53,134 @@ def _load_config() -> dict:
             continue
     return {}
 
-_cfg          = _load_config()
-_SERVER_BASE  = (_cfg.get("ingest_url", "") or "").replace("/ingest", "").rstrip("/")
-_DEVICE_KEY   = _cfg.get("api_key", "")   # per-user device key — same key the agent uses for /ingest
-_AUTO_REFRESH = 30   # seconds between auto-refreshes
-# NOTE: no admin key is read or stored here — the device key is sufficient for /api/me/*
+_cfg         = _load_config()
+_SERVER_BASE = (_cfg.get("ingest_url", "") or "").replace("/ingest", "").rstrip("/")
+_DEVICE_KEY  = _cfg.get("api_key", "")
+_AUTO_REFRESH = 30  # seconds
 
-# ── Windows DPAPI — decrypt backup files written by the agent ────────────────
+UI_VERSION = "3.0"
 
-class _CryptBlob(ctypes.Structure):
-    _fields_ = [("cbData", ctypes.c_uint32), ("pbData", ctypes.POINTER(ctypes.c_byte))]
-
-
-def _dpapi_decrypt(ciphertext: bytes) -> bytes:
-    buf      = ctypes.create_string_buffer(ciphertext, len(ciphertext))
-    in_blob  = _CryptBlob(len(ciphertext), ctypes.cast(buf, ctypes.POINTER(ctypes.c_byte)))
-    out_blob = _CryptBlob()
-    ok = ctypes.windll.crypt32.CryptUnprotectData(
-        ctypes.byref(in_blob), None, None, None, None, 0, ctypes.byref(out_blob)
-    )
-    if not ok:
-        raise OSError(f"CryptUnprotectData failed (error {ctypes.GetLastError()})")
+# ── Theme ─────────────────────────────────────────────────────────────────────
+def _detect_dark_mode() -> bool:
     try:
-        return bytes(out_blob.pbData[:out_blob.cbData])
-    finally:
-        ctypes.windll.kernel32.LocalFree(out_blob.pbData)
+        import winreg
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+        )
+        val, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+        winreg.CloseKey(key)
+        return val == 0
+    except Exception:
+        return False
 
 
-def _current_username() -> str:
-    return os.environ.get("USERNAME", "") or os.getlogin()
+def _make_theme(dark: bool) -> dict:
+    if dark:
+        return dict(
+            BG="#1e1e2e", BG2="#181825", BG3="#24243e",
+            BORDER="#313244", TEXT="#cdd6f4", MUTED="#6c7086",
+            GREEN="#a6e3a1", RED="#f38ba8", BLUE="#89b4fa",
+            YELLOW="#f9e2af", INDIGO="#b4befe",
+        )
+    return dict(
+        BG="#ffffff", BG2="#f8fafc", BG3="#f1f5f9",
+        BORDER="#e2e8f0", TEXT="#1e293b", MUTED="#64748b",
+        GREEN="#16a34a", RED="#dc2626", BLUE="#3b82f6",
+        YELLOW="#d97706", INDIGO="#6366f1",
+    )
 
 
+# ── Helpers ───────────────────────────────────────────────────────────────────
+def _ver(v: str) -> tuple:
+    try:
+        return tuple(int(x) for x in v.strip().split("."))
+    except Exception:
+        return (0,)
+
+
+def _fmt_time(secs: int) -> str:
+    if secs <= 0:
+        return "0m"
+    h, m = divmod(int(secs), 3600)
+    m = m // 60
+    return f"{h}h {m}m" if h else f"{m}m"
+
+
+# ── Self-update ───────────────────────────────────────────────────────────────
+def check_for_update() -> None:
+    if not getattr(sys, "frozen", False):
+        return
+    if not _SERVER_BASE:
+        return
+    current_exe = sys.executable
+    install_dir = os.path.dirname(current_exe)
+    try:
+        resp = requests.get(f"{_SERVER_BASE}/api/health", timeout=10, verify=True)
+        if not resp.ok:
+            return
+        data           = resp.json()
+        server_version = data.get("version", "0")
+        download_url   = data.get("ui_zip_download_url", f"{_SERVER_BASE}/download-ui")
+    except Exception:
+        return
+    if _ver(server_version) <= _ver(UI_VERSION):
+        return
+    tmp_dir = os.path.join(tempfile.gettempdir(), "TelemetryAgent")
+    os.makedirs(tmp_dir, exist_ok=True)
+    tmp_zip = os.path.join(tmp_dir, "telemetry_ui_new.zip")
+    ps_path = os.path.join(tmp_dir, "ui_updater.ps1")
+    try:
+        with requests.get(download_url, stream=True, timeout=60, verify=True) as r:
+            r.raise_for_status()
+            with open(tmp_zip, "wb") as f:
+                for chunk in r.iter_content(chunk_size=65536):
+                    f.write(chunk)
+    except Exception:
+        return
+    if os.path.getsize(tmp_zip) < 1024:
+        return
+    ps_lines = [
+        "Start-Sleep -Seconds 3",
+        f"Expand-Archive -Path '{tmp_zip}' -DestinationPath '{install_dir}' -Force",
+        f"Get-ChildItem -Path '{install_dir}' -Recurse | Unblock-File -ErrorAction SilentlyContinue",
+        f"Remove-Item '{tmp_zip}' -Force -ErrorAction SilentlyContinue",
+        f"Start-Process '{current_exe}'",
+        "Remove-Item $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue",
+    ]
+    with open(ps_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(ps_lines))
+    subprocess.Popen(
+        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+         "-WindowStyle", "Hidden", "-File", ps_path],
+        creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW,
+        close_fds=True,
+    )
+    sys.exit(0)
+
+
+# ── Backup events ─────────────────────────────────────────────────────────────
 def read_backup_events(date_str: str) -> list[dict]:
-    """
-    Read and decrypt all backup files the agent wrote for the given date.
-    Returns a flat list of raw event dicts (same shape as /ingest payload events).
-    Falls back gracefully — any unreadable file is skipped.
-    """
-    username = _current_username()
+    username = os.environ.get("USERNAME", "") or os.getlogin()
     if not username:
         return []
     backup_dir = os.path.join(tempfile.gettempdir(), "telemetry_backup", username)
     if not os.path.isdir(backup_dir):
         return []
-
-    # date_str is YYYY-MM-DD; file timestamps are YYYYMMDDTHHMMSS…
     date_prefix = date_str.replace("-", "")
-
     events: list[dict] = []
-    files = sorted(
-        glob.glob(os.path.join(backup_dir, "batch_*.bin")) +
-        glob.glob(os.path.join(backup_dir, "batch_*.json"))
-    )
-    for fpath in files:
-        fname = os.path.basename(fpath)
-        # Filter to files whose timestamp prefix matches the requested date
-        # fname format: batch_20260422T143022123456.bin
-        if date_prefix not in fname:
+    for fpath in sorted(glob.glob(os.path.join(backup_dir, "batch_*.json"))):
+        if date_prefix not in os.path.basename(fpath):
             continue
         try:
-            if fpath.endswith(".bin"):
-                raw     = _dpapi_decrypt(open(fpath, "rb").read())
-                payload = json.loads(raw)
-            else:
-                with open(fpath, encoding="utf-8") as f:
-                    payload = json.load(f)
-            events.extend(payload.get("events", []))
+            with open(fpath, encoding="utf-8") as f:
+                events.extend(json.load(f).get("events", []))
         except Exception:
             continue
     return events
 
 
-# ── Lightweight aggregation for local backup events ───────────────────────────
-# Mirrors just enough of backend/aggregator.py to populate the UI widgets.
-# No server required — operates purely on the raw event list.
-
+# ── Local aggregation ─────────────────────────────────────────────────────────
 _UNPRODUCTIVE_KEYWORDS = {
     "youtube", "netflix", "instagram", "facebook", "twitter", "x.com",
     "tiktok", "snapchat", "reddit", "twitch", "prime video", "disney+",
@@ -140,7 +188,6 @@ _UNPRODUCTIVE_KEYWORDS = {
     "steam store", "epic games store", "whatsapp", "telegram",
     "spotify.exe", "steam.exe", "vlc.exe",
 }
-
 _PRODUCTIVE_APP_KEYWORDS = {
     "code.exe", "cursor.exe", "devenv.exe", "pycharm", "idea", "rider",
     "windowsterminal.exe", "powershell.exe", "pwsh.exe", "cmd.exe",
@@ -151,7 +198,7 @@ _PRODUCTIVE_APP_KEYWORDS = {
 
 
 def _local_categorize(app: str, domain: str) -> str:
-    al = (app    or "").lower()
+    al = (app or "").lower()
     dl = (domain or "").lower()
     if any(k in dl for k in _UNPRODUCTIVE_KEYWORDS):
         return "Unproductive"
@@ -159,19 +206,14 @@ def _local_categorize(app: str, domain: str) -> str:
         return "Unproductive"
     if any(k in al for k in _PRODUCTIVE_APP_KEYWORDS):
         return "Productive"
-    return "Productive"   # benefit of the doubt
+    return "Productive"
 
 
 def aggregate_backup(events: list[dict]) -> dict[str, Any]:
-    """
-    Produce summary + apps + hourly from raw backup events.
-    Returns same structure as build_display_data() expects.
-    """
     total_active = total_idle = total_locked = prod_secs = 0
     app_times: dict[str, int] = {}
-    app_cat:   dict[str, str] = {}
+    app_cat: dict[str, str] = {}
     hourly = [0] * 24
-
     for ev in events:
         dur    = ev.get("duration", 0)
         locked = ev.get("locked", False)
@@ -179,7 +221,6 @@ def aggregate_backup(events: list[dict]) -> dict[str, Any]:
         app    = ev.get("app", "Unknown")
         domain = ev.get("domain", "")
         cat    = _local_categorize(app, domain)
-
         if active:
             total_active += dur
             app_times[app] = app_times.get(app, 0) + dur
@@ -195,17 +236,12 @@ def aggregate_backup(events: list[dict]) -> dict[str, Any]:
             total_locked += dur
         else:
             total_idle += dur
-
     top_app = max(app_times, key=app_times.get) if app_times else "—"
     score   = round(prod_secs / total_active * 100, 1) if total_active else 0.0
-
     apps = sorted(
         [{"app": a, "time": t, "category": app_cat[a]} for a, t in app_times.items()],
         key=lambda x: x["time"], reverse=True,
     )
-    prod_secs_total   = sum(a["time"] for a in apps if a["category"] == "Productive")
-    unprod_secs_total = sum(a["time"] for a in apps if a["category"] == "Unproductive")
-
     return {
         "summary": {
             "total_active_time":     total_active,
@@ -215,33 +251,17 @@ def aggregate_backup(events: list[dict]) -> dict[str, Any]:
             "top_app":               top_app,
         },
         "apps":        apps,
-        "prod_secs":   prod_secs_total,
-        "unprod_secs": unprod_secs_total,
+        "prod_secs":   sum(a["time"] for a in apps if a["category"] == "Productive"),
+        "unprod_secs": sum(a["time"] for a in apps if a["category"] == "Unproductive"),
         "hourly":      hourly,
     }
 
 
-# ── Thread-safe message queue (tray thread → tkinter main thread) ────────────
+# ── Data layer ────────────────────────────────────────────────────────────────
 _ui_queue: queue.Queue = queue.Queue()
 
-# ── Colors ───────────────────────────────────────────────────────────────────
-BG       = "#ffffff"
-BG2      = "#f8fafc"
-BORDER   = "#e2e8f0"
-TEXT     = "#1e293b"
-MUTED    = "#64748b"
-GREEN    = "#16a34a"
-RED      = "#dc2626"
-BLUE     = "#3b82f6"
-YELLOW   = "#d97706"
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Data layer
-# ═══════════════════════════════════════════════════════════════════════════════
 
 def read_local() -> tuple[dict | None, dict | None]:
-    """Read status.json + cache.json. Returns (status, cache) — either may be None."""
     status = cache = None
     try:
         with open(STATUS_PATH, encoding="utf-8") as f:
@@ -256,95 +276,193 @@ def read_local() -> tuple[dict | None, dict | None]:
     return status, cache
 
 
-def fetch_server(date_str: str) -> tuple[dict | None, list, list]:
-    """
-    GET /api/me/summary, /api/me/apps, /api/me/timeline from server.
+def _server_available() -> bool:
+    """Quick 2-second ping to /api/health. Used to fast-fail before parallel fetches."""
+    if not _SERVER_BASE or not _DEVICE_KEY:
+        return False
+    try:
+        r = requests.get(f"{_SERVER_BASE}/api/health",
+                         headers={"X-API-Key": _DEVICE_KEY}, timeout=2)
+        return r.ok
+    except Exception:
+        return False
 
-    Uses the per-user device key (same key the agent uses for POST /ingest).
-    The server scopes the response to the key owner automatically — no username
-    parameter is sent and no admin key is required.
-    Falls back gracefully to (None, [], []) when unreachable.
+
+def fetch_server(date_str: str) -> tuple[dict | None, list, list, str]:
+    """
+    Returns (summary, apps, timeline, conn_status).
+    conn_status: 'ok' | 'unreachable' | 'maintenance' | 'error' | 'not_configured'
+    Aborts remaining calls as soon as a network failure is detected.
     """
     if not _SERVER_BASE or not _DEVICE_KEY:
-        return None, [], []
+        return None, [], [], "not_configured"
 
-    headers = {"X-API-Key": _DEVICE_KEY}
-    base    = _SERVER_BASE
+    username    = os.environ.get("USERNAME", "")
+    headers     = {"X-API-Key": _DEVICE_KEY}
+    conn_status = "ok"
 
     def _get(path: str, default):
+        nonlocal conn_status
+        if conn_status in ("unreachable", "maintenance"):
+            return default
         try:
-            r = requests.get(f"{base}{path}?date={date_str}",
-                             headers=headers, timeout=5)
-            return r.json() if r.ok else default
+            r = requests.get(
+                f"{_SERVER_BASE}{path}?user={username}&date={date_str}",
+                headers=headers, timeout=5,
+            )
+            if r.ok:
+                return r.json()
+            conn_status = "maintenance" if r.status_code in (502, 503, 504) else "error"
+            return default
+        except (requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout):
+            conn_status = "unreachable"
+            return default
         except Exception:
+            conn_status = "error"
             return default
 
     summary  = _get("/api/me/summary",  None)
     apps     = _get("/api/me/apps",     [])
     timeline = _get("/api/me/timeline", [])
-    return summary, apps, timeline
+    return summary, apps, timeline, conn_status
+
+
+def fetch_server_week(days: int = 7) -> list[dict]:
+    """
+    Parallel fetch of last N days — oldest first, summary + apps only.
+    Does a quick availability check first so a downed server doesn't hang
+    for 7 × 2 × 5s = 70 seconds.
+    """
+    if not _SERVER_BASE or not _DEVICE_KEY:
+        return []
+    if not _server_available():
+        return []
+
+    today    = datetime.now(timezone.utc).date()
+    dates    = [today - timedelta(days=i) for i in range(days - 1, -1, -1)]
+    username = os.environ.get("USERNAME", "")
+    headers  = {"X-API-Key": _DEVICE_KEY}
+
+    def _one(d):
+        date_str = d.isoformat()
+        try:
+            rs      = requests.get(
+                f"{_SERVER_BASE}/api/me/summary?user={username}&date={date_str}",
+                headers=headers, timeout=5,
+            )
+            summary = rs.json() if rs.ok else {}
+        except Exception:
+            summary = {}
+        try:
+            ra   = requests.get(
+                f"{_SERVER_BASE}/api/me/apps?user={username}&date={date_str}",
+                headers=headers, timeout=5,
+            )
+            apps = ra.json() if ra.ok else []
+        except Exception:
+            apps = []
+        active = summary.get("total_active_time", 0)
+        prod   = sum(a.get("time", 0) for a in apps if a.get("category") == "Productive")
+        return {
+            "date":        date_str,
+            "label":       d.strftime("%a"),
+            "active_secs": active,
+            "prod_secs":   prod,
+        }
+
+    with ThreadPoolExecutor(max_workers=7) as ex:
+        return list(ex.map(_one, dates))
+
+
+def _make_banner(conn_status: str, summary, backup_agg) -> tuple | None:
+    """
+    Return (text, severity) describing connectivity state, or None when live.
+    severity: 'info' | 'warn' | 'error'
+    UI maps severity → theme color for the banner strip.
+    """
+    if conn_status == "ok":
+        return None
+    has_data = summary is not None or backup_agg is not None
+    if conn_status == "not_configured":
+        return ("ℹ  No server configured — showing local data only", "info")
+    if conn_status == "maintenance":
+        msg = "🔧  Server under maintenance" + (" — showing cached data" if has_data else " — no local data available")
+        return (msg, "warn")
+    if conn_status in ("unreachable", "error"):
+        if has_data:
+            src = "cached" if backup_agg is None else "backup"
+            return (f"⚠  Server unreachable — showing {src} data", "warn")
+        return ("✗  Server unreachable — no local data. Check network connection.", "error")
+    return None
+
+
+def _timeline_to_hourly(timeline: list) -> list[int]:
+    hourly = [0] * 24
+    for entry in timeline:
+        if not entry.get("active"):
+            continue
+        try:
+            ts = datetime.fromisoformat(entry["timestamp"]).astimezone()
+            hourly[ts.hour] = min(hourly[ts.hour] + entry.get("duration", 0), 3600)
+        except Exception:
+            pass
+    return hourly
 
 
 def build_display_data(date_str: str | None = None) -> dict[str, Any]:
-    """
-    Merge local cache + server data into a single dict for the popup.
-    For today: local files are the fast path; server enriches when reachable.
-    For past dates: server only (local files only hold today's state).
-    """
     today    = datetime.now(timezone.utc).date().isoformat()
     if not date_str:
         date_str = today
     is_today = (date_str == today)
 
     status, cache = (read_local() if is_today else (None, None))
-    summary, apps, timeline = fetch_server(date_str)
-    server_ok = summary is not None and bool(_SERVER_BASE)
+    summary, apps, timeline, conn_status = fetch_server(date_str)
+    server_ok = summary is not None and conn_status == "ok"
 
-    # ── Live status (today only) ───────────────────────────────────────────
+    # Live status
     if is_today:
-        app       = (status or {}).get("app",     "Unknown")
-        active    = (status or {}).get("active",  False)
-        locked    = (status or {}).get("locked",  False)
+        app       = (status or {}).get("app",    "Unknown")
+        active    = (status or {}).get("active", False)
+        locked    = (status or {}).get("locked", False)
         status_ts = (status or {}).get("timestamp", "")
         if locked:
-            status_label, status_color = "Away",   RED
+            status_label, status_color = "Away",   "#dc2626"
         elif not active:
-            status_label, status_color = "Idle",   YELLOW
+            status_label, status_color = "Idle",   "#d97706"
         else:
-            status_label, status_color = "Active", GREEN
+            status_label, status_color = "Active", "#16a34a"
     else:
         app = "—"
-        status_label, status_color = "Historical", MUTED
+        status_label, status_color = "Historical", "#64748b"
         status_ts = ""
 
-    # ── Summary (server → cache → backup) ─────────────────────────────────
+    # Summary fallback chain: server → cache → backup
     backup_agg = None
     if summary is None and is_today and cache:
         summary = cache.get("summary")
     if summary is None:
-        # Server down and no cache — try local encrypted backup files
         backup_events = read_backup_events(date_str)
         if backup_events:
             backup_agg = aggregate_backup(backup_events)
             summary    = backup_agg["summary"]
 
-    active_secs = (summary or {}).get("total_active_time", 0)
-    idle_secs   = (summary or {}).get("total_idle_time",   0)
-    score       = (summary or {}).get("productivity_score", 0.0)
-    top_app     = (summary or {}).get("top_app", "—")
+    active_secs      = (summary or {}).get("total_active_time",     0)
+    idle_secs        = (summary or {}).get("total_idle_time",       0)
+    screen_off_secs  = (summary or {}).get("total_screen_off_time", 0)
+    score            = (summary or {}).get("productivity_score",    0.0)
+    top_app          = (summary or {}).get("top_app", "—")
 
-    # ── Top apps (server → cache → backup) ────────────────────────────────
     if not apps and is_today and cache:
         apps = cache.get("top_apps", [])
     if not apps and backup_agg:
         apps = backup_agg["apps"]
 
-    prod_secs   = backup_agg["prod_secs"]   if backup_agg and not server_ok else \
-                  sum(a.get("time", 0) for a in apps if a.get("category") == "Productive")
-    unprod_secs = backup_agg["unprod_secs"] if backup_agg and not server_ok else \
-                  sum(a.get("time", 0) for a in apps if a.get("category") == "Unproductive")
+    prod_secs   = (backup_agg["prod_secs"]   if backup_agg and not server_ok
+                   else sum(a.get("time", 0) for a in apps if a.get("category") == "Productive"))
+    unprod_secs = (backup_agg["unprod_secs"] if backup_agg and not server_ok
+                   else sum(a.get("time", 0) for a in apps if a.get("category") == "Unproductive"))
 
-    # ── Hourly activity (server timeline → cache → backup) ─────────────────
     if timeline:
         hourly = _timeline_to_hourly(timeline)
     elif is_today and cache:
@@ -354,255 +472,600 @@ def build_display_data(date_str: str | None = None) -> dict[str, Any]:
     else:
         hourly = [0] * 24
 
-    # ── Last-updated label ─────────────────────────────────────────────────
     if not is_today:
-        last_updated = f"Server — {date_str}" if server_ok else f"No server data — {date_str}"
+        last_updated = f"Server — {date_str}" if server_ok else f"No data — {date_str}"
     elif server_ok:
         last_updated = f"Server  {datetime.now().strftime('%H:%M:%S')}"
     elif status_ts:
         try:
             ts = datetime.fromisoformat(status_ts).astimezone()
-            last_updated = f"Local cache  {ts.strftime('%H:%M:%S')}"
+            last_updated = f"Local  {ts.strftime('%H:%M:%S')}"
         except Exception:
             last_updated = "Local cache"
     elif backup_agg:
-        last_updated = f"Local backup  {datetime.now().strftime('%H:%M:%S')}"
+        last_updated = f"Backup  {datetime.now().strftime('%H:%M:%S')}"
     else:
         last_updated = "No data"
 
     return {
-        "app":          app,
-        "is_today":     is_today,
-        "status_label": status_label,
-        "status_color": status_color,
-        "score":        score,
-        "active_secs":  active_secs + idle_secs,   # screen-on time
-        "idle_secs":    idle_secs,
-        "top_app":      top_app.replace(".exe", ""),
-        "prod_secs":    prod_secs,
-        "unprod_secs":  unprod_secs,
-        "hourly":       hourly,
-        "top_apps":     apps[:6],
-        "last_updated": last_updated,
-        "server_ok":    server_ok,
+        "app":             app,
+        "is_today":        is_today,
+        "status_label":    status_label,
+        "status_color":    status_color,
+        "score":           score,
+        "active_secs":     active_secs + idle_secs,
+        "prod_secs":       prod_secs,
+        "unprod_secs":     unprod_secs,
+        "idle_secs":       idle_secs,
+        "screen_off_secs": screen_off_secs,
+        "top_app":         top_app.replace(".exe", ""),
+        "hourly":          hourly,
+        "top_apps":        apps[:10],
+        "last_updated":    last_updated,
+        "server_ok":       server_ok,
+        "conn_status":     conn_status,
+        "banner":          _make_banner(conn_status, summary, backup_agg),
     }
 
 
-def _timeline_to_hourly(timeline: list) -> list[int]:
-    """Distribute active durations from a timeline into 24 hourly buckets."""
-    hourly = [0] * 24
-    for entry in timeline:
-        if not entry.get("active"):
-            continue
-        try:
-            ts = datetime.fromisoformat(entry["timestamp"]).astimezone()
-            h  = ts.hour
-            hourly[h] = min(hourly[h] + entry.get("duration", 0), 3600)
-        except Exception:
-            pass
-    return hourly
-
-
 # ═══════════════════════════════════════════════════════════════════════════════
-# Popup window
+# Dashboard window — compact popup + full dashboard in one persistent window
 # ═══════════════════════════════════════════════════════════════════════════════
 
-class PopupWindow:
-    W, H = 320, 570
+class DashboardWindow:
+    CW, CH = 380, 610   # compact dimensions
+    FW, FH = 1100, 700  # full dimensions
 
     def __init__(self, root: tk.Tk):
-        self._root = root
-        self._win  = tk.Toplevel(root)
-        self._win.overrideredirect(True)       # no title bar
-        self._win.configure(bg=BG)
-        self._win.attributes("-topmost", True)
-        self._win.attributes("-alpha", 0.99)
-        self._selected_date: str = datetime.now(timezone.utc).date().isoformat()
-        self._position()
-        self._build_ui()
-        self._drag_start: tuple[int, int] | None = None
-        self._win.bind("<ButtonPress-1>",   self._on_drag_start)
-        self._win.bind("<B1-Motion>",       self._on_drag_move)
-        self._win.bind("<FocusOut>",        lambda _: self.close())
+        self._root          = root
+        self._dark          = _detect_dark_mode()
+        self._theme         = _make_theme(self._dark)
+        self._mode          = "compact"
+        self._selected_date = datetime.now(timezone.utc).date().isoformat()
+        self._week_data: list[dict] = []
         self._refresh_job: str | None = None
+        self._drag_start: tuple[int, int] | None = None
+        self._cal_visible   = False
+        self._cal_year      = 0
+        self._cal_month     = 0
+        self._cal_day_btns: list[tk.Button] = []
+        self._week_cv: tk.Canvas | None     = None
+
+        self._win = tk.Toplevel(root)
+        self._win.overrideredirect(True)
+        self._win.configure(bg=self._theme["BG"])
+        self._win.attributes("-topmost", True)
+        self._win.attributes("-alpha", 0.98)
+
+        self._position_compact()
+        self._build_compact()
+        self._start_theme_monitor()
         self.refresh()
 
-    # ── Layout ────────────────────────────────────────────────────────────────
-    def _build_ui(self):
+    # ── Theme ──────────────────────────────────────────────────────────────────
+    @property
+    def T(self) -> dict:
+        return self._theme
+
+    def _start_theme_monitor(self):
+        def _check():
+            if not self._win.winfo_exists():
+                return
+            new_dark = _detect_dark_mode()
+            if new_dark != self._dark:
+                self._dark  = new_dark
+                self._theme = _make_theme(new_dark)
+                self._win.configure(bg=self.T["BG"])
+                if self._mode == "compact":
+                    self._rebuild("compact")
+                else:
+                    self._rebuild("full")
+            self._win.after(60_000, _check)
+        self._win.after(60_000, _check)
+
+    def _rebuild(self, mode: str):
+        self._mode = mode
+        if self._refresh_job:
+            self._win.after_cancel(self._refresh_job)
+            self._refresh_job = None
+        for w in self._win.winfo_children():
+            w.destroy()
+        self._cal_visible = False
+        self._win.configure(bg=self.T["BG"])
+        if mode == "compact":
+            self._position_compact()
+            self._build_compact()
+        else:
+            self._position_full()
+            self._build_full()
+        self.refresh()
+        if mode == "full":
+            threading.Thread(target=self._fetch_week, daemon=True).start()
+
+    # ── Visibility ─────────────────────────────────────────────────────────────
+    def show(self):
+        self._win.deiconify()
+        self._win.lift()
+        self._win.attributes("-topmost", True)
+
+    def hide(self):
+        self._win.withdraw()
+
+    def _on_focus_out(self, _event=None):
+        if self._mode == "compact" and not self._cal_visible:
+            self.hide()
+
+    # ── Mode switch ────────────────────────────────────────────────────────────
+    def _switch_to_full(self):
+        # Unbind compact-only behaviours before rebuild
+        self._win.unbind("<FocusOut>")
+        self._win.unbind("<ButtonPress-1>")
+        self._win.unbind("<B1-Motion>")
+        self._rebuild("full")
+
+    def _switch_to_compact(self):
+        self._rebuild("compact")
+
+    # ── Positions ──────────────────────────────────────────────────────────────
+    def _position_compact(self):
+        sw = self._root.winfo_screenwidth()
+        sh = self._root.winfo_screenheight()
+        self._win.geometry(f"{self.CW}x{self.CH}+{sw - self.CW - 14}+{sh - self.CH - 48}")
+
+    def _position_full(self):
+        sw = self._root.winfo_screenwidth()
+        sh = self._root.winfo_screenheight()
+        x  = (sw - self.FW) // 2
+        y  = (sh - self.FH) // 2
+        self._win.geometry(f"{self.FW}x{self.FH}+{x}+{y}")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # Compact UI
+    # ══════════════════════════════════════════════════════════════════════════
+    def _build_compact(self):
+        T = self.T
         w = self._win
 
-        # ── Fixed header (always visible) ─────────────────────────────────
-        hdr = tk.Frame(w, bg=BG2, height=46)
+        # Header
+        hdr = tk.Frame(w, bg=T["BG2"], height=46)
         hdr.pack(fill="x")
         hdr.pack_propagate(False)
-
-        self._dot = tk.Label(hdr, text="●", fg=GREEN, bg=BG2, font=("Segoe UI", 12))
+        self._dot = tk.Label(hdr, text="●", fg=T["GREEN"], bg=T["BG2"],
+                             font=("Segoe UI", 12))
         self._dot.place(x=14, y=13)
-        self._status_lbl = tk.Label(hdr, text="Active", fg=TEXT, bg=BG2,
+        self._status_lbl = tk.Label(hdr, text="Active", fg=T["TEXT"], bg=T["BG2"],
                                     font=("Segoe UI", 11, "bold"))
         self._status_lbl.place(x=34, y=11)
-        tk.Button(hdr, text="✕", fg=MUTED, bg=BG2, bd=0, activebackground=BG2,
-                  activeforeground=TEXT, font=("Segoe UI", 12), cursor="hand2",
-                  command=self.close).place(x=290, y=8)
+        # □ expand, ✕ hide
+        tk.Button(hdr, text="□", fg=T["MUTED"], bg=T["BG2"], bd=0,
+                  activebackground=T["BG2"], activeforeground=T["TEXT"],
+                  font=("Segoe UI", 13), cursor="hand2",
+                  command=self._switch_to_full).place(x=322, y=7)
+        tk.Button(hdr, text="✕", fg=T["MUTED"], bg=T["BG2"], bd=0,
+                  activebackground=T["BG2"], activeforeground=T["TEXT"],
+                  font=("Segoe UI", 12), cursor="hand2",
+                  command=self.hide).place(x=350, y=8)
 
-        # ── Date nav bar (always visible) ─────────────────────────────────
-        nav = tk.Frame(w, bg=BG2)
+        # Date nav
+        nav = tk.Frame(w, bg=T["BG2"])
         nav.pack(fill="x")
         self._cal_btn = tk.Button(
-            nav, text="📅  Today", fg=TEXT, bg=BG2, bd=0,
-            activebackground=BG2, activeforeground=BLUE,
+            nav, text="📅  Today", fg=T["TEXT"], bg=T["BG2"], bd=0,
+            activebackground=T["BG2"], activeforeground=T["BLUE"],
             font=("Segoe UI", 9, "bold"), cursor="hand2",
             anchor="center", command=self._toggle_calendar,
         )
         self._cal_btn.pack(side="left", expand=True, padx=8, pady=5)
         self._today_btn = tk.Button(
-            nav, text="← Today", fg=BLUE, bg=BG2, bd=0,
-            activebackground=BG2, activeforeground=BLUE,
+            nav, text="← Today", fg=T["BLUE"], bg=T["BG2"], bd=0,
+            activebackground=T["BG2"], activeforeground=T["BLUE"],
             font=("Segoe UI", 8), cursor="hand2",
             command=self._go_today,
         )
-        # hidden until navigated to a past date
-        tk.Frame(w, bg=BORDER, height=1).pack(fill="x")
+        tk.Frame(w, bg=T["BORDER"], height=1).pack(fill="x")
 
-        # ── Footer (always visible, anchored to bottom) ───────────────────
-        ftr = tk.Frame(w, bg=BG2, height=36)
+        # Footer (bottom-anchored)
+        ftr = tk.Frame(w, bg=T["BG2"], height=34)
         ftr.pack(fill="x", side="bottom")
         ftr.pack_propagate(False)
-        self._last_upd = tk.Label(ftr, text="Refreshing…", fg=MUTED, bg=BG2,
-                                  font=("Segoe UI", 8))
+        self._last_upd = tk.Label(ftr, text="Refreshing…", fg=T["MUTED"], bg=T["BG2"],
+                                   font=("Segoe UI", 8))
         self._last_upd.place(x=14, y=10)
-        tk.Button(ftr, text="↻", fg=MUTED, bg=BG2, bd=0,
-                  activebackground=BG2, activeforeground=TEXT,
+        tk.Button(ftr, text="↻", fg=T["MUTED"], bg=T["BG2"], bd=0,
+                  activebackground=T["BG2"], activeforeground=T["TEXT"],
                   font=("Segoe UI", 12), cursor="hand2",
-                  command=self.refresh).place(x=292, y=4)
+                  command=self.refresh).place(x=350, y=4)
 
-        # ── Inline calendar panel (hidden; swaps with body on demand) ─────
-        self._cal_frame = tk.Frame(w, bg=BG)
-        self._cal_visible = False
-        self._cal_year  = 0
-        self._cal_month = 0
-        self._cal_day_btns: list[tk.Button] = []
+        # Calendar panel (hidden; swaps with body)
+        self._cal_frame = tk.Frame(w, bg=T["BG"])
         self._build_calendar_panel()
 
-        # ── Body (stats) ───────────────────────────────────────────────────
-        self._body_frame = tk.Frame(w, bg=BG)
+        # Body
+        self._body_frame = tk.Frame(w, bg=T["BG"])
         self._body_frame.pack(fill="both", expand=True)
         body = self._body_frame
 
-        self._donut_cv = tk.Canvas(body, width=130, height=130, bg=BG,
-                                   highlightthickness=0)
-        self._donut_cv.pack(pady=(16, 2))
+        # Connection banner — always packed first; height=0 when server OK
+        self._conn_wrap = tk.Frame(body, bg=T["BG2"], height=0)
+        self._conn_wrap.pack(fill="x")
+        self._conn_wrap.pack_propagate(False)
+        self._conn_lbl = tk.Label(
+            self._conn_wrap, text="", fg=T["TEXT"], bg=T["BG2"],
+            font=("Segoe UI", 8), anchor="w", padx=10,
+        )
+        self._conn_lbl.pack(fill="x", expand=True)
 
-        legend_row = tk.Frame(body, bg=BG)
-        legend_row.pack(pady=(0, 4))
-        self._prod_legend   = tk.Label(legend_row, text="● 0h Productive",
-                                       fg=GREEN, bg=BG, font=("Segoe UI", 8, "bold"))
+        self._donut_cv = tk.Canvas(body, width=130, height=130, bg=T["BG"],
+                                    highlightthickness=0)
+        self._donut_cv.pack(pady=(14, 2))
+
+        leg = tk.Frame(body, bg=T["BG"])
+        leg.pack(pady=(0, 6))
+        self._prod_legend   = tk.Label(leg, text="● 0m Productive",
+                                       fg=T["GREEN"], bg=T["BG"],
+                                       font=("Segoe UI", 8, "bold"))
         self._prod_legend.pack(side="left", padx=6)
-        self._unprod_legend = tk.Label(legend_row, text="● 0h Unproductive",
-                                       fg=RED, bg=BG, font=("Segoe UI", 8, "bold"))
+        self._unprod_legend = tk.Label(leg, text="● 0m Unproductive",
+                                       fg=T["RED"], bg=T["BG"],
+                                       font=("Segoe UI", 8, "bold"))
         self._unprod_legend.pack(side="left", padx=6)
 
-        kpi = tk.Frame(body, bg=BG)
+        kpi = tk.Frame(body, bg=T["BG"])
         kpi.pack(fill="x", padx=16)
-        self._kpi_labels: dict[str, tk.Label] = {}
-        for col, (key, label) in enumerate([("active_secs", "Active"),
-                                             ("top_app",     "Top App"),
-                                             ("idle_secs",   "Idle")]):
-            cell = tk.Frame(kpi, bg=BG)
+        self._kpi_lbl: dict[str, tk.Label] = {}
+        for col, (key, label) in enumerate([
+            ("active_secs", "Active"), ("top_app", "Top App"), ("idle_secs", "Idle"),
+        ]):
+            cell = tk.Frame(kpi, bg=T["BG"])
             cell.grid(row=0, column=col, sticky="ew", padx=4)
             kpi.columnconfigure(col, weight=1)
-            val = tk.Label(cell, text="—", fg=TEXT, bg=BG,
+            val = tk.Label(cell, text="—", fg=T["TEXT"], bg=T["BG"],
                            font=("Segoe UI", 11, "bold"))
             val.pack()
-            tk.Label(cell, text=label, fg=MUTED, bg=BG,
+            tk.Label(cell, text=label, fg=T["MUTED"], bg=T["BG"],
                      font=("Segoe UI", 9)).pack()
-            self._kpi_labels[key] = val
+            self._kpi_lbl[key] = val
 
-        tk.Frame(body, bg=BORDER, height=1).pack(fill="x", padx=16, pady=10)
-
-        tk.Label(body, text="24-Hour Activity", fg=MUTED, bg=BG,
+        tk.Frame(body, bg=T["BORDER"], height=1).pack(fill="x", padx=16, pady=8)
+        tk.Label(body, text="24-Hour Activity", fg=T["MUTED"], bg=T["BG"],
                  font=("Segoe UI", 9)).pack(anchor="w", padx=16)
-        self._activity_cv = tk.Canvas(body, width=288, height=64, bg=BG,
-                                      highlightthickness=0)
+        self._activity_cv = tk.Canvas(body, width=self.CW - 32, height=64,
+                                       bg=T["BG"], highlightthickness=0)
         self._activity_cv.pack(padx=16, pady=(4, 2))
+        hrow = tk.Frame(body, bg=T["BG"])
+        hrow.pack(fill="x", padx=16)
+        tk.Label(hrow, text="12am", fg=T["MUTED"], bg=T["BG"],
+                 font=("Segoe UI", 7)).pack(side="left")
+        tk.Label(hrow, text="12pm", fg=T["MUTED"], bg=T["BG"],
+                 font=("Segoe UI", 7)).pack(side="left", expand=True)
+        tk.Label(hrow, text="11pm", fg=T["MUTED"], bg=T["BG"],
+                 font=("Segoe UI", 7)).pack(side="right")
 
-        hour_row = tk.Frame(body, bg=BG)
-        hour_row.pack(fill="x", padx=16)
-        tk.Label(hour_row, text="12am", fg=MUTED, bg=BG,
-                 font=("Segoe UI", 8)).pack(side="left")
-        tk.Label(hour_row, text="12pm", fg=MUTED, bg=BG,
-                 font=("Segoe UI", 8)).pack(side="left", expand=True)
-        tk.Label(hour_row, text="11pm", fg=MUTED, bg=BG,
-                 font=("Segoe UI", 8)).pack(side="right")
-
-        tk.Frame(body, bg=BORDER, height=1).pack(fill="x", padx=16, pady=10)
-
-        tk.Label(body, text="Top Apps", fg=MUTED, bg=BG,
+        tk.Frame(body, bg=T["BORDER"], height=1).pack(fill="x", padx=16, pady=8)
+        tk.Label(body, text="Top Apps", fg=T["MUTED"], bg=T["BG"],
                  font=("Segoe UI", 9)).pack(anchor="w", padx=16)
-        self._apps_frame = tk.Frame(body, bg=BG)
+        self._apps_frame = tk.Frame(body, bg=T["BG"])
         self._apps_frame.pack(fill="x", padx=16, pady=(4, 0))
 
-    def _build_calendar_panel(self):
-        """Build the reusable inline calendar inside _cal_frame (not packed yet)."""
-        import calendar as _cal_mod
-        self._cal_mod = _cal_mod
+        # Drag bindings (compact only)
+        self._win.bind("<ButtonPress-1>",  self._on_drag_start)
+        self._win.bind("<B1-Motion>",      self._on_drag_move)
+        self._win.bind("<FocusOut>",       self._on_focus_out)
 
+    # ══════════════════════════════════════════════════════════════════════════
+    # Full UI
+    # ══════════════════════════════════════════════════════════════════════════
+    def _build_full(self):
+        T  = self.T
+        W  = self.FW
+        w  = self._win
+
+        # ── Title bar ─────────────────────────────────────────────────────
+        hdr = tk.Frame(w, bg=T["BG2"], height=50)
+        hdr.pack(fill="x")
+        hdr.pack_propagate(False)
+
+        self._dot = tk.Label(hdr, text="●", fg=T["GREEN"], bg=T["BG2"],
+                             font=("Segoe UI", 13))
+        self._dot.place(x=16, y=14)
+        self._status_lbl = tk.Label(hdr, text="Active", fg=T["TEXT"], bg=T["BG2"],
+                                    font=("Segoe UI", 12, "bold"))
+        self._status_lbl.place(x=40, y=13)
+
+        tk.Label(hdr, text="Activity Dashboard", fg=T["MUTED"], bg=T["BG2"],
+                 font=("Segoe UI", 11)).place(x=160, y=15)
+
+        self._cal_btn = tk.Button(
+            hdr, text="📅  Today", fg=T["TEXT"], bg=T["BG3"], bd=0,
+            activebackground=T["BG3"], activeforeground=T["BLUE"],
+            font=("Segoe UI", 9, "bold"), cursor="hand2",
+            command=self._toggle_calendar, padx=10, pady=4,
+        )
+        self._cal_btn.place(x=360, y=10)
+
+        self._last_upd = tk.Label(hdr, text="Refreshing…", fg=T["MUTED"], bg=T["BG2"],
+                                   font=("Segoe UI", 8))
+        self._last_upd.place(x=560, y=18)
+
+        tk.Button(hdr, text="↻", fg=T["MUTED"], bg=T["BG2"], bd=0,
+                  activebackground=T["BG2"], activeforeground=T["TEXT"],
+                  font=("Segoe UI", 12), cursor="hand2",
+                  command=self.refresh).place(x=W - 110, y=13)
+        tk.Button(hdr, text="⊟", fg=T["MUTED"], bg=T["BG2"], bd=0,
+                  activebackground=T["BG2"], activeforeground=T["TEXT"],
+                  font=("Segoe UI", 14), cursor="hand2",
+                  command=self._switch_to_compact).place(x=W - 76, y=11)
+        tk.Button(hdr, text="✕", fg=T["MUTED"], bg=T["BG2"], bd=0,
+                  activebackground=T["BG2"], activeforeground=T["RED"],
+                  font=("Segoe UI", 13), cursor="hand2",
+                  command=self.hide).place(x=W - 44, y=13)
+
+        tk.Frame(w, bg=T["BORDER"], height=1).pack(fill="x")
+
+        # ── KPI bar ───────────────────────────────────────────────────────
+        kpi_bar = tk.Frame(w, bg=T["BG2"], height=74)
+        kpi_bar.pack(fill="x")
+        kpi_bar.pack_propagate(False)
+        self._full_kpi: dict[str, tk.Label] = {}
+        kpi_defs = [
+            ("active_secs",     "Active Time",  T["BLUE"]),
+            ("prod_secs",       "Productive",   T["GREEN"]),
+            ("screen_off_secs", "Screen Off",   T["MUTED"]),
+            ("score",           "Score",        T["INDIGO"]),
+            ("top_app",         "Top App",      T["TEXT"]),
+        ]
+        slot_w = W // len(kpi_defs)
+        for i, (key, label, color) in enumerate(kpi_defs):
+            cell = tk.Frame(kpi_bar, bg=T["BG2"])
+            cell.place(x=i * slot_w, y=0, width=slot_w, height=74)
+            if i > 0:
+                tk.Frame(cell, bg=T["BORDER"], width=1).place(x=0, y=8, height=58)
+            val = tk.Label(cell, text="—", fg=color, bg=T["BG2"],
+                           font=("Segoe UI", 16, "bold"))
+            val.place(relx=0.5, y=10, anchor="n")
+            tk.Label(cell, text=label, fg=T["MUTED"], bg=T["BG2"],
+                     font=("Segoe UI", 9)).place(relx=0.5, y=46, anchor="n")
+            self._full_kpi[key] = val
+
+        tk.Frame(w, bg=T["BORDER"], height=1).pack(fill="x")
+
+        # ── Content area ──────────────────────────────────────────────────
+        content = tk.Frame(w, bg=T["BG"])
+        content.pack(fill="both", expand=True)
+
+        # Left column — donut + top apps
+        left = tk.Frame(content, bg=T["BG"], width=300)
+        left.pack(side="left", fill="y", padx=(20, 0), pady=16)
+        left.pack_propagate(False)
+
+        tk.Label(left, text="Productivity Mix", fg=T["MUTED"], bg=T["BG"],
+                 font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        self._donut_cv = tk.Canvas(left, width=270, height=270, bg=T["BG"],
+                                    highlightthickness=0)
+        self._donut_cv.pack(pady=(6, 6))
+
+        leg = tk.Frame(left, bg=T["BG"])
+        leg.pack()
+        self._prod_legend   = tk.Label(leg, text="● 0m Productive",
+                                       fg=T["GREEN"], bg=T["BG"],
+                                       font=("Segoe UI", 9, "bold"))
+        self._prod_legend.pack(side="left", padx=6)
+        self._unprod_legend = tk.Label(leg, text="● 0m Unproductive",
+                                       fg=T["RED"], bg=T["BG"],
+                                       font=("Segoe UI", 9, "bold"))
+        self._unprod_legend.pack(side="left", padx=6)
+
+        tk.Frame(left, bg=T["BORDER"], height=1).pack(fill="x", pady=10)
+        tk.Label(left, text="Top Apps", fg=T["MUTED"], bg=T["BG"],
+                 font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        self._apps_frame = tk.Frame(left, bg=T["BG"])
+        self._apps_frame.pack(fill="x", pady=(4, 0))
+
+        # Vertical divider
+        tk.Frame(content, bg=T["BORDER"], width=1).pack(side="left", fill="y",
+                                                          padx=(16, 16))
+
+        # Right column — charts
+        right = tk.Frame(content, bg=T["BG"])
+        right.pack(side="left", fill="both", expand=True, padx=(0, 20), pady=16)
+
+        # Connection banner (full mode)
+        self._conn_wrap = tk.Frame(right, bg=T["BG2"], height=0)
+        self._conn_wrap.pack(fill="x", pady=(0, 4))
+        self._conn_wrap.pack_propagate(False)
+        self._conn_lbl = tk.Label(
+            self._conn_wrap, text="", fg=T["TEXT"], bg=T["BG2"],
+            font=("Segoe UI", 8), anchor="w", padx=10,
+        )
+        self._conn_lbl.pack(fill="x", expand=True)
+
+        # 24h chart
+        tk.Label(right, text="24-Hour Activity", fg=T["MUTED"], bg=T["BG"],
+                 font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        self._activity_cv = tk.Canvas(right, height=155, bg=T["BG"],
+                                       highlightthickness=0)
+        self._activity_cv.pack(fill="x", pady=(4, 2))
+        hrow = tk.Frame(right, bg=T["BG"])
+        hrow.pack(fill="x")
+        for lbl, side, expand in [
+            ("12am", "left", False), ("6am", "left", True),
+            ("12pm", "left", True),  ("6pm", "left", True),
+            ("11pm", "right", False),
+        ]:
+            tk.Label(hrow, text=lbl, fg=T["MUTED"], bg=T["BG"],
+                     font=("Segoe UI", 8)).pack(side=side, expand=expand)
+
+        tk.Frame(right, bg=T["BORDER"], height=1).pack(fill="x", pady=10)
+
+        # 7-day chart
+        week_hdr = tk.Frame(right, bg=T["BG"])
+        week_hdr.pack(fill="x")
+        tk.Label(week_hdr, text="7-Day Activity", fg=T["MUTED"], bg=T["BG"],
+                 font=("Segoe UI", 9, "bold")).pack(side="left")
+        tk.Label(week_hdr, text="  ● Active", fg=T["BLUE"], bg=T["BG"],
+                 font=("Segoe UI", 8)).pack(side="left", padx=(12, 0))
+        tk.Label(week_hdr, text="  ● Productive", fg=T["GREEN"], bg=T["BG"],
+                 font=("Segoe UI", 8)).pack(side="left")
+
+        self._week_cv = tk.Canvas(right, height=155, bg=T["BG"],
+                                   highlightthickness=0)
+        self._week_cv.pack(fill="x", pady=(6, 0))
+
+        # Calendar overlay (hidden; placed absolutely when shown)
+        self._cal_frame = tk.Frame(w, bg=T["BG"],
+                                    highlightthickness=1,
+                                    highlightbackground=T["BORDER"])
+        self._build_calendar_panel()
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # Calendar
+    # ══════════════════════════════════════════════════════════════════════════
+    def _build_calendar_panel(self):
+        import calendar as _cm
+        T = self.T
         f = self._cal_frame
 
-        # Month nav
-        mnav = tk.Frame(f, bg=BG2)
-        mnav.pack(fill="x", padx=12, pady=(10, 4))
-        tk.Button(mnav, text="‹", fg=TEXT, bg=BG2, bd=0, activebackground=BG2,
-                  activeforeground=BLUE, font=("Segoe UI", 14), cursor="hand2",
+        mnav = tk.Frame(f, bg=T["BG2"])
+        mnav.pack(fill="x", padx=10, pady=(8, 4))
+        tk.Button(mnav, text="‹", fg=T["TEXT"], bg=T["BG2"], bd=0,
+                  activebackground=T["BG2"], activeforeground=T["BLUE"],
+                  font=("Segoe UI", 14), cursor="hand2",
                   command=self._cal_prev_month).pack(side="left")
-        tk.Button(mnav, text="›", fg=TEXT, bg=BG2, bd=0, activebackground=BG2,
-                  activeforeground=BLUE, font=("Segoe UI", 14), cursor="hand2",
+        tk.Button(mnav, text="›", fg=T["TEXT"], bg=T["BG2"], bd=0,
+                  activebackground=T["BG2"], activeforeground=T["BLUE"],
+                  font=("Segoe UI", 14), cursor="hand2",
                   command=self._cal_next_month).pack(side="right")
-        self._cal_hdr_lbl = tk.Label(mnav, text="", fg=TEXT, bg=BG2,
-                                     font=("Segoe UI", 10, "bold"), width=14,
-                                     anchor="center")
+        self._cal_hdr_lbl = tk.Label(mnav, text="", fg=T["TEXT"], bg=T["BG2"],
+                                     font=("Segoe UI", 10, "bold"), width=14, anchor="center")
         self._cal_hdr_lbl.pack(side="left", expand=True)
 
-        # Day-of-week header
-        dow_row = tk.Frame(f, bg=BG)
-        dow_row.pack(fill="x", padx=12)
+        dow = tk.Frame(f, bg=T["BG"])
+        dow.pack(fill="x", padx=10)
         for d in ("Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"):
-            tk.Label(dow_row, text=d, fg=MUTED, bg=BG,
+            tk.Label(dow, text=d, fg=T["MUTED"], bg=T["BG"],
                      font=("Segoe UI", 8, "bold"), width=4,
                      anchor="center").pack(side="left", expand=True)
+        tk.Frame(f, bg=T["BORDER"], height=1).pack(fill="x", padx=10, pady=2)
 
-        tk.Frame(f, bg=BORDER, height=1).pack(fill="x", padx=12, pady=2)
-
-        # 6-row × 7-col day grid (pre-allocated, reconfigured on month change)
-        grid_f = tk.Frame(f, bg=BG)
-        grid_f.pack(fill="x", padx=12, pady=(2, 8))
-        for row in range(6):
-            grid_f.rowconfigure(row, weight=1)
-        for col in range(7):
-            grid_f.columnconfigure(col, weight=1)
+        grid_f = tk.Frame(f, bg=T["BG"])
+        grid_f.pack(fill="x", padx=10, pady=(2, 6))
+        for r in range(6): grid_f.rowconfigure(r, weight=1)
+        for c in range(7): grid_f.columnconfigure(c, weight=1)
 
         self._cal_day_btns = []
-        for row in range(6):
-            for col in range(7):
+        for r in range(6):
+            for c in range(7):
                 btn = tk.Button(
                     grid_f, text="", width=3, height=1, bd=0,
                     font=("Segoe UI", 9), cursor="hand2",
-                    bg=BG, fg=TEXT,
-                    activebackground=BLUE, activeforeground="#ffffff",
+                    bg=T["BG"], fg=T["TEXT"],
+                    activebackground=T["BLUE"], activeforeground="#ffffff",
                     relief="flat",
                 )
-                btn.grid(row=row, column=col, padx=2, pady=2, sticky="nsew")
+                btn.grid(row=r, column=c, padx=2, pady=2, sticky="nsew")
                 self._cal_day_btns.append(btn)
 
-        # Cancel button
-        tk.Button(
-            f, text="Cancel", bg=BG2, fg=MUTED, bd=0,
-            activebackground=BG2, activeforeground=TEXT,
-            font=("Segoe UI", 8), cursor="hand2",
-            command=self._toggle_calendar,
-        ).pack(pady=(0, 10))
+        tk.Button(f, text="Cancel", bg=T["BG2"], fg=T["MUTED"], bd=0,
+                  activebackground=T["BG2"], activeforeground=T["TEXT"],
+                  font=("Segoe UI", 8), cursor="hand2",
+                  command=self._toggle_calendar).pack(pady=(0, 8))
 
-    # ── Refresh ───────────────────────────────────────────────────────────────
+    def _toggle_calendar(self):
+        if self._cal_visible:
+            if self._mode == "full":
+                self._cal_frame.place_forget()
+            else:
+                self._cal_frame.pack_forget()
+                self._body_frame.pack(fill="both", expand=True)
+                self._win.bind("<FocusOut>", self._on_focus_out)
+            self._cal_visible = False
+        else:
+            from datetime import date as _d
+            try:
+                sel = _d.fromisoformat(self._selected_date)
+            except Exception:
+                sel = datetime.now(timezone.utc).date()
+            self._cal_year, self._cal_month = sel.year, sel.month
+            self._cal_refresh(self._selected_date)
+
+            if self._mode == "full":
+                self._cal_frame.place(x=340, y=50, width=310, height=330)
+                self._cal_frame.lift()
+            else:
+                self._body_frame.pack_forget()
+                self._cal_frame.pack(fill="both", expand=True)
+            self._cal_visible = True
+            self._win.unbind("<FocusOut>")
+
+    def _cal_refresh(self, selected_iso: str = ""):
+        import calendar as _cm
+        from datetime import date as _d
+        T     = self.T
+        today = datetime.now(timezone.utc).date()
+        self._cal_hdr_lbl.configure(
+            text=_d(self._cal_year, self._cal_month, 1).strftime("%B %Y")
+        )
+        first_wd = _cm.weekday(self._cal_year, self._cal_month, 1)
+        days_in  = _cm.monthrange(self._cal_year, self._cal_month)[1]
+        cells: list[tuple[int, str | None]] = (
+            [(0, None)] * first_wd
+            + [(d, _d(self._cal_year, self._cal_month, d).isoformat())
+               for d in range(1, days_in + 1)]
+        )
+        cells += [(0, None)] * (42 - len(cells))
+
+        for idx, btn in enumerate(self._cal_day_btns):
+            day_num, iso = cells[idx]
+            if day_num == 0:
+                btn.configure(text="", state="disabled", bg=T["BG"],
+                              disabledforeground=T["BG"], cursor="arrow")
+                btn.config(command=lambda: None)
+            else:
+                is_today = iso == today.isoformat()
+                is_sel   = iso == selected_iso
+                is_fut   = iso > today.isoformat()
+                if is_fut:
+                    bg_c, fg_c, st = T["BG"], T["BORDER"], "disabled"
+                elif is_sel:
+                    bg_c, fg_c, st = T["BLUE"], "#ffffff", "normal"
+                elif is_today:
+                    bg_c, fg_c, st = T["BG3"], T["BLUE"], "normal"
+                else:
+                    bg_c, fg_c, st = T["BG"], T["TEXT"], "normal"
+                btn.configure(text=str(day_num), state=st, bg=bg_c, fg=fg_c,
+                              disabledforeground=T["BORDER"], cursor="hand2")
+                if st == "normal":
+                    btn.config(command=lambda d=iso: self._cal_pick(d))
+
+    def _cal_prev_month(self):
+        if self._cal_month == 1:
+            self._cal_year, self._cal_month = self._cal_year - 1, 12
+        else:
+            self._cal_month -= 1
+        self._cal_refresh(self._selected_date)
+
+    def _cal_next_month(self):
+        from datetime import date as _d
+        ny = self._cal_year + (1 if self._cal_month == 12 else 0)
+        nm = 1 if self._cal_month == 12 else self._cal_month + 1
+        if _d(ny, nm, 1) <= datetime.now(timezone.utc).date():
+            self._cal_year, self._cal_month = ny, nm
+            self._cal_refresh(self._selected_date)
+
+    def _cal_pick(self, iso: str):
+        self._selected_date = iso
+        self._toggle_calendar()
+        self.refresh()
+
+    def _go_today(self):
+        self._selected_date = datetime.now(timezone.utc).date().isoformat()
+        if self._cal_visible:
+            self._toggle_calendar()
+        self.refresh()
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # Refresh
+    # ══════════════════════════════════════════════════════════════════════════
     def refresh(self):
         if self._refresh_job:
             self._win.after_cancel(self._refresh_job)
@@ -612,220 +1075,265 @@ class PopupWindow:
     def _fetch_and_update(self):
         try:
             data = build_display_data(self._selected_date)
-            self._win.after(0, lambda: self._apply(data))
+            mode = self._mode
+            if mode == "compact":
+                self._win.after(0, lambda: self._apply_compact(data))
+            else:
+                self._win.after(0, lambda: self._apply_full(data))
         except Exception:
             pass
 
-    def _apply(self, d: dict):
-        # Date nav bar
-        is_today = d["is_today"]
-        if is_today:
-            self._cal_btn.configure(text="📅  Today")
-            self._today_btn.pack_forget()
-        else:
-            try:
-                from datetime import date as _date
-                dt = _date.fromisoformat(self._selected_date)
-                self._cal_btn.configure(text=f"📅  {dt.strftime('%b %d, %Y')}")
-            except Exception:
-                self._cal_btn.configure(text=f"📅  {self._selected_date}")
-            self._today_btn.pack(side="right", padx=(0, 6), pady=5)
+    def _fetch_week(self):
+        try:
+            week = fetch_server_week(7)
+            self._week_data = week
+            self._win.after(0, lambda: self._render_week(week))
+        except Exception:
+            pass
 
-        # Header status
-        self._dot.configure(fg=d["status_color"])
+    # ══════════════════════════════════════════════════════════════════════════
+    # Apply compact
+    # ══════════════════════════════════════════════════════════════════════════
+    def _apply_compact(self, d: dict):
+        if not self._win.winfo_exists():
+            return
+        T = self.T
+        is_today = d["is_today"]
+        try:
+            if is_today:
+                self._cal_btn.configure(text="📅  Today")
+                self._today_btn.pack_forget()
+            else:
+                from datetime import date as _dt
+                self._cal_btn.configure(
+                    text=f"📅  {_dt.fromisoformat(self._selected_date).strftime('%b %d, %Y')}"
+                )
+                self._today_btn.pack(side="right", padx=(0, 6), pady=5)
+        except Exception:
+            pass
+
+        # Connection banner
+        self._update_banner(d.get("banner"))
+
+        # Status dot — use theme color for dark-mode correctness
+        dot_key = {"Active": "GREEN", "Idle": "YELLOW", "Away": "RED"}.get(
+            d["status_label"], "MUTED"
+        )
+        self._dot.configure(fg=T[dot_key])
         self._status_lbl.configure(text=d["status_label"])
 
-        # Donut
-        self._draw_donut(d["prod_secs"], d["unprod_secs"])
+        self._draw_donut(self._donut_cv, d["prod_secs"], d["unprod_secs"], 130, 19)
         self._prod_legend.configure(text=f"● {_fmt_time(d['prod_secs'])} Productive")
         self._unprod_legend.configure(text=f"● {_fmt_time(d['unprod_secs'])} Unproductive")
 
-        # KPIs
-        self._kpi_labels["active_secs"].configure(text=_fmt_time(d["active_secs"]))
-        self._kpi_labels["idle_secs"].configure(text=_fmt_time(d["idle_secs"]))
-        app_short = (d["top_app"] or "—")[:12]
-        self._kpi_labels["top_app"].configure(text=app_short)
+        self._kpi_lbl["active_secs"].configure(text=_fmt_time(d["active_secs"]))
+        self._kpi_lbl["idle_secs"].configure(text=_fmt_time(d["idle_secs"]))
+        self._kpi_lbl["top_app"].configure(text=(d["top_app"] or "—")[:12])
 
-        # 24h chart
-        self._draw_activity(d["hourly"])
-
-        # Top apps list
-        for w in self._apps_frame.winfo_children():
-            w.destroy()
-        for entry in d["top_apps"][:5]:
-            row = tk.Frame(self._apps_frame, bg=BG)
-            row.pack(fill="x", pady=1)
-            color = GREEN if entry.get("category") == "Productive" else RED
-            tk.Label(row, text="●", fg=color, bg=BG,
-                     font=("Segoe UI", 8)).pack(side="left")
-            name = entry.get("app", "").replace(".exe", "")
-            tk.Label(row, text=name, fg=TEXT, bg=BG,
-                     font=("Segoe UI", 9), anchor="w").pack(side="left", padx=4)
-            tk.Label(row, text=_fmt_time(entry.get("time", 0)), fg=MUTED, bg=BG,
-                     font=("Segoe UI", 9)).pack(side="right")
-
-        # Footer
+        self._draw_bar_chart(self._activity_cv, d["hourly"], self.CW - 32, 64)
+        self._render_apps(d["top_apps"][:5])
         self._last_upd.configure(text=d["last_updated"])
 
-    # ── Date navigation ───────────────────────────────────────────────────────
-    def _toggle_calendar(self):
-        """Show/hide the inline calendar, swapping it with the body frame."""
-        if self._cal_visible:
-            # Hide calendar, show body
-            self._cal_frame.pack_forget()
-            self._body_frame.pack(fill="both", expand=True)
-            self._cal_visible = False
-            # Restore FocusOut-to-close
-            self._win.bind("<FocusOut>", lambda _: self.close())
-        else:
-            # Seed the calendar to the currently selected month
-            from datetime import date as _date
-            try:
-                sel = _date.fromisoformat(self._selected_date)
-            except Exception:
-                sel = datetime.now(timezone.utc).date()
-            self._cal_year  = sel.year
-            self._cal_month = sel.month
-            self._cal_refresh(selected_iso=self._selected_date)
-            # Swap frames
-            self._body_frame.pack_forget()
-            self._cal_frame.pack(fill="both", expand=True)
-            self._cal_visible = True
-            # Disable FocusOut-to-close while calendar is open so clicking
-            # a day button (which briefly changes focus) doesn't close the popup
-            self._win.unbind("<FocusOut>")
-
-    def _cal_refresh(self, selected_iso: str = ""):
-        """Repopulate the 42 day-buttons for _cal_year / _cal_month."""
-        import calendar as _cal_mod
-        from datetime import date as _date
-        today = datetime.now(timezone.utc).date()
-
-        self._cal_hdr_lbl.configure(
-            text=_date(self._cal_year, self._cal_month, 1).strftime("%B %Y")
-        )
-
-        # Build a flat list of (day_number_or_0, date_obj_or_None) for 6×7 cells
-        first_wd = _cal_mod.weekday(self._cal_year, self._cal_month, 1)  # 0=Mon
-        days_in  = _cal_mod.monthrange(self._cal_year, self._cal_month)[1]
-        cells: list[tuple[int, str | None]] = []
-        cells.extend((0, None) for _ in range(first_wd))       # leading blanks
-        for d in range(1, days_in + 1):
-            iso = _date(self._cal_year, self._cal_month, d).isoformat()
-            cells.append((d, iso))
-        cells.extend((0, None) for _ in range(42 - len(cells)))  # trailing blanks
-
-        for idx, btn in enumerate(self._cal_day_btns):
-            day_num, iso = cells[idx]
-            if day_num == 0:
-                btn.configure(text="", state="disabled", bg=BG,
-                              disabledforeground=BG, cursor="arrow")
-                btn.config(command=lambda: None)
+    # ══════════════════════════════════════════════════════════════════════════
+    # Apply full
+    # ══════════════════════════════════════════════════════════════════════════
+    def _apply_full(self, d: dict):
+        if not self._win.winfo_exists():
+            return
+        try:
+            if d["is_today"]:
+                self._cal_btn.configure(text="📅  Today")
             else:
-                is_today    = (iso == today.isoformat())
-                is_selected = (iso == selected_iso)
-                is_future   = (iso > today.isoformat())
+                from datetime import date as _dt
+                self._cal_btn.configure(
+                    text=f"📅  {_dt.fromisoformat(self._selected_date).strftime('%b %d, %Y')}"
+                )
+        except Exception:
+            pass
 
-                if is_future:
-                    bg_c, fg_c, state = BG, BORDER, "disabled"
-                elif is_selected:
-                    bg_c, fg_c, state = BLUE, "#ffffff", "normal"
-                elif is_today:
-                    bg_c, fg_c, state = "#e0e7ff", BLUE, "normal"
-                else:
-                    bg_c, fg_c, state = BG, TEXT, "normal"
+        # Connection banner
+        self._update_banner(d.get("banner"))
 
-                btn.configure(text=str(day_num), state=state,
-                              bg=bg_c, fg=fg_c,
-                              disabledforeground=BORDER, cursor="hand2")
-                if state == "normal":
-                    btn.config(command=lambda d=iso: self._cal_pick(d))
+        try:
+            dot_key = {"Active": "GREEN", "Idle": "YELLOW", "Away": "RED"}.get(
+                d["status_label"], "MUTED"
+            )
+            self._dot.configure(fg=self.T[dot_key])
+            self._status_lbl.configure(text=d["status_label"])
+        except Exception:
+            pass
 
-    def _cal_prev_month(self):
-        if self._cal_month == 1:
-            self._cal_year  -= 1
-            self._cal_month  = 12
-        else:
-            self._cal_month -= 1
-        self._cal_refresh(selected_iso=self._selected_date)
+        try:
+            self._full_kpi["active_secs"].configure(text=_fmt_time(d["active_secs"]))
+            self._full_kpi["prod_secs"].configure(text=_fmt_time(d["prod_secs"]))
+            self._full_kpi["screen_off_secs"].configure(text=_fmt_time(d["screen_off_secs"]))
+            self._full_kpi["score"].configure(text=f"{d['score']:.0f}%")
+            self._full_kpi["top_app"].configure(text=(d["top_app"] or "—")[:14])
+        except Exception:
+            pass
 
-    def _cal_next_month(self):
-        from datetime import date as _date
-        today = datetime.now(timezone.utc).date()
-        next_y = self._cal_year  + (1 if self._cal_month == 12 else 0)
-        next_m = 1 if self._cal_month == 12 else self._cal_month + 1
-        if _date(next_y, next_m, 1) <= today:
-            self._cal_year  = next_y
-            self._cal_month = next_m
-            self._cal_refresh(selected_iso=self._selected_date)
+        self._draw_donut(self._donut_cv, d["prod_secs"], d["unprod_secs"], 270, 34)
+        try:
+            self._prod_legend.configure(text=f"● {_fmt_time(d['prod_secs'])} Productive")
+            self._unprod_legend.configure(text=f"● {_fmt_time(d['unprod_secs'])} Unproductive")
+        except Exception:
+            pass
 
-    def _cal_pick(self, iso: str):
-        """User clicked a day — accept it, hide calendar, refresh data."""
-        self._selected_date = iso
-        self._toggle_calendar()   # hides calendar, shows body, restores FocusOut
-        self.refresh()
+        self._win.after(50, lambda: self._draw_bar_chart_full(d["hourly"]))
+        self._render_apps(d["top_apps"][:8])
 
-    def _go_today(self):
-        self._selected_date = datetime.now(timezone.utc).date().isoformat()
-        if self._cal_visible:
-            self._toggle_calendar()
-        self.refresh()
+        try:
+            self._last_upd.configure(text=d["last_updated"])
+        except Exception:
+            pass
 
-    # ── Charts ────────────────────────────────────────────────────────────────
-    def _draw_donut(self, prod: int, unprod: int):
-        cv = self._donut_cv
+    def _draw_bar_chart_full(self, hourly: list[int]):
+        try:
+            cv = self._activity_cv
+            cv.update_idletasks()
+            W = cv.winfo_width() or (self.FW - 380)
+            self._draw_bar_chart(cv, hourly, W, 155)
+        except Exception:
+            pass
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # Banner helper
+    # ══════════════════════════════════════════════════════════════════════════
+    def _update_banner(self, banner: tuple | None):
+        """Show or hide the connectivity status banner."""
+        try:
+            T = self.T
+            if banner:
+                msg, severity = banner
+                fg = {"info": T["BLUE"], "warn": T["YELLOW"], "error": T["RED"]}.get(
+                    severity, T["MUTED"]
+                )
+                self._conn_wrap.configure(height=26, bg=T["BG2"])
+                self._conn_lbl.configure(text=msg, fg=fg, bg=T["BG2"])
+            else:
+                self._conn_wrap.configure(height=0, bg=T["BG2"])
+                self._conn_lbl.configure(text="", bg=T["BG2"])
+        except Exception:
+            pass
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # Charts (canvas-based)
+    # ══════════════════════════════════════════════════════════════════════════
+    def _draw_donut(self, cv: tk.Canvas, prod: int, unprod: int,
+                    size: int, ring: int):
+        T  = self.T
         cv.delete("all")
-        size   = 130
-        cx, cy = size // 2, size // 2
-        r_out  = 55   # ring thickness = 19 px
-
+        cx = cy = size // 2
+        r  = cx - ring // 2 - 4
         total = prod + unprod
         if total <= 0:
-            cv.create_oval(cx - r_out, cy - r_out, cx + r_out, cy + r_out,
-                           outline=BORDER, width=19)
+            cv.create_oval(cx - r, cy - r, cx + r, cy + r,
+                           outline=T["BORDER"], width=ring)
         else:
-            prod_angle = prod / total * 360
+            pa = prod / total * 360
+            cv.create_arc(cx - r, cy - r, cx + r, cy + r,
+                          start=90, extent=-360, outline=T["RED"],
+                          width=ring, style="arc")
+            if pa > 0:
+                cv.create_arc(cx - r, cy - r, cx + r, cy + r,
+                              start=90, extent=-pa, outline=T["GREEN"],
+                              width=ring, style="arc")
+        fs      = max(10, size // 10)
+        fs_sub  = max(7, fs - 3)
+        label   = _fmt_time(prod) if prod > 0 else "0m"
+        cv.create_text(cx, cy - fs // 2 - 2, text=label,
+                       fill=T["TEXT"], font=("Segoe UI", fs, "bold"))
+        cv.create_text(cx, cy + fs // 2 + 4, text="productive",
+                       fill=T["MUTED"], font=("Segoe UI", fs_sub))
 
-            def arc(start, extent, color):
-                cv.create_arc(cx - r_out, cy - r_out, cx + r_out, cy + r_out,
-                              start=start, extent=extent,
-                              outline=color, width=19, style="arc")
-
-            arc(90, -360, RED)          # unproductive base ring
-            if prod_angle > 0:
-                arc(90, -prod_angle, GREEN)   # productive overlay
-
-        # Center: show productive hours
-        prod_text = _fmt_time(prod) if prod > 0 else "0m"
-        cv.create_text(cx, cy - 9, text=prod_text,
-                       fill=TEXT, font=("Segoe UI", 13, "bold"))
-        cv.create_text(cx, cy + 10, text="productive",
-                       fill=MUTED, font=("Segoe UI", 8))
-
-    def _draw_activity(self, hourly: list[int]):
-        cv  = self._activity_cv
+    def _draw_bar_chart(self, cv: tk.Canvas, hourly: list[int], W: int, H: int):
+        T      = self.T
         cv.delete("all")
-        W, H = 288, 64
-        max_v = max(hourly) if max(hourly) > 0 else 1
-        bar_w = W / 24
+        max_v  = max(hourly) if max(hourly) > 0 else 1
+        bar_w  = W / 24
+        now_h  = datetime.now().hour
 
         for h, val in enumerate(hourly):
-            bar_h = max(2, (val / max_v) * (H - 4)) if val > 0 else 0
             x0 = h * bar_w + 1
             x1 = x0 + bar_w - 2
-            y0 = H - bar_h
-            y1 = H
-            color = GREEN if val > 1800 else BLUE if val > 300 else "#cbd5e1"
-            cv.create_rectangle(x0, y0, x1, y1, fill=color, outline="")
+            if val > 1800:
+                color = T["GREEN"]
+            elif val > 300:
+                color = T["BLUE"]
+            else:
+                color = T["BORDER"]
+            if val > 0:
+                bar_h = max(2, (val / max_v) * (H - 6))
+                cv.create_rectangle(x0, H - bar_h, x1, H, fill=color, outline="")
+            # Dashed cursor for current hour (today only)
+            if h == now_h:
+                cv.create_line(x0 + (bar_w - 2) / 2, 0,
+                               x0 + (bar_w - 2) / 2, H,
+                               fill=T["INDIGO"], dash=(3, 3), width=1)
 
-    # ── Window management ─────────────────────────────────────────────────────
-    def _position(self):
-        wa_x = self._root.winfo_screenwidth()
-        wa_y = self._root.winfo_screenheight()
-        x = wa_x - self.W - 14
-        y = wa_y - self.H - 48   # 48 = approx taskbar height
-        self._win.geometry(f"{self.W}x{self.H}+{x}+{y}")
+    def _render_week(self, week_data: list[dict]):
+        if not self._week_cv or not self._week_cv.winfo_exists():
+            return
+        cv = self._week_cv
+        cv.update_idletasks()
+        W = cv.winfo_width() or (self.FW - 380)
+        H = 155
+        T = self.T
+        cv.delete("all")
+        if not week_data:
+            return
 
+        max_secs  = max(d["active_secs"] for d in week_data) or 1
+        n         = len(week_data)
+        slot_w    = W / n
+        bar_area  = H - 32  # room for labels + hour text
+        today_str = datetime.now(timezone.utc).date().isoformat()
+
+        for i, day in enumerate(week_data):
+            xc = slot_w * i + slot_w / 2
+            bw = slot_w * 0.55
+            x0, x1 = xc - bw / 2, xc + bw / 2
+
+            if day["active_secs"] > 0:
+                ah = max(3, day["active_secs"] / max_secs * bar_area)
+                cv.create_rectangle(x0, bar_area - ah, x1, bar_area,
+                                    fill=T["BLUE"], outline="")
+            if day["prod_secs"] > 0:
+                ph = max(3, day["prod_secs"] / max_secs * bar_area)
+                cv.create_rectangle(x0, bar_area - ph, x1, bar_area,
+                                    fill=T["GREEN"], outline="")
+
+            is_today  = day["date"] == today_str
+            lbl_color = T["INDIGO"] if is_today else T["MUTED"]
+            font_wt   = "bold" if is_today else "normal"
+            cv.create_text(xc, H - 14, text=day["label"],
+                           fill=lbl_color, font=("Segoe UI", 9, font_wt))
+
+            if day["active_secs"] > 0:
+                ah = max(3, day["active_secs"] / max_secs * bar_area)
+                hrs_label = f"{day['active_secs']/3600:.1f}h"
+                cv.create_text(xc, bar_area - ah - 10,
+                               text=hrs_label, fill=T["MUTED"],
+                               font=("Segoe UI", 8))
+
+    def _render_apps(self, apps: list[dict]):
+        T = self.T
+        frame = self._apps_frame
+        for child in frame.winfo_children():
+            child.destroy()
+        for entry in apps:
+            row = tk.Frame(frame, bg=T["BG"])
+            row.pack(fill="x", pady=1)
+            color = T["GREEN"] if entry.get("category") == "Productive" else T["RED"]
+            tk.Label(row, text="●", fg=color, bg=T["BG"],
+                     font=("Segoe UI", 8)).pack(side="left")
+            name = entry.get("app", "").replace(".exe", "")
+            tk.Label(row, text=name, fg=T["TEXT"], bg=T["BG"],
+                     font=("Segoe UI", 9), anchor="w").pack(side="left", padx=4)
+            tk.Label(row, text=_fmt_time(entry.get("time", 0)), fg=T["MUTED"], bg=T["BG"],
+                     font=("Segoe UI", 9)).pack(side="right")
+
+    # ── Drag (compact only) ────────────────────────────────────────────────────
     def _on_drag_start(self, e):
         self._drag_start = (e.x_root - self._win.winfo_x(),
                             e.y_root - self._win.winfo_y())
@@ -835,22 +1343,15 @@ class PopupWindow:
             dx, dy = self._drag_start
             self._win.geometry(f"+{e.x_root - dx}+{e.y_root - dy}")
 
-    def close(self):
-        if self._refresh_job:
-            self._win.after_cancel(self._refresh_job)
-        self._win.destroy()
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # System tray
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _make_tray_icon(color: str = GREEN) -> Image.Image:
-    """Create a 64×64 donut icon. Colour reflects current status."""
+def _make_tray_icon(color: str = "#16a34a") -> Image.Image:
     size = 64
     img  = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-    r    = (color.lstrip("#"),)
     rgb  = tuple(int(color.lstrip("#")[i:i+2], 16) for i in (0, 2, 4))
     draw.ellipse([4,  4,  size - 4,  size - 4],  fill=rgb)
     draw.ellipse([18, 18, size - 18, size - 18], fill=(0, 0, 0, 0))
@@ -870,44 +1371,42 @@ def _tooltip_text() -> str:
 
 
 def run_tray(root: tk.Tk):
-    """Runs in a background daemon thread."""
-    _popup_ref: list[PopupWindow | None] = [None]
+    _ref: list[DashboardWindow | None] = [None]
 
-    def show_popup():
-        if _popup_ref[0] and _popup_ref[0]._win.winfo_exists():
-            return
-        root.after(0, lambda: _open_popup(root, _popup_ref))
+    def _show():
+        def _do():
+            if _ref[0] and _ref[0]._win.winfo_exists():
+                if _ref[0]._win.state() == "withdrawn":
+                    _ref[0].show()
+                else:
+                    _ref[0].hide()
+            else:
+                _ref[0] = DashboardWindow(root)
+        root.after(0, _do)
 
-    def open_dashboard():
+    def _open_dashboard():
         if _SERVER_BASE:
             import webbrowser
             webbrowser.open(_SERVER_BASE)
 
-    def do_refresh():
-        if _popup_ref[0] and _popup_ref[0]._win.winfo_exists():
-            root.after(0, _popup_ref[0].refresh)
+    def _do_refresh():
+        if _ref[0] and _ref[0]._win.winfo_exists():
+            root.after(0, _ref[0].refresh)
 
-    def do_exit(icon, _item):
+    def _do_exit(icon, _item):
         icon.stop()
         root.after(0, root.quit)
 
     menu = pystray.Menu(
-        pystray.MenuItem("Show Stats",       lambda *_: show_popup(),      default=True),
-        pystray.MenuItem("Open Dashboard",   lambda *_: open_dashboard()),
+        pystray.MenuItem("Show Stats",     lambda *_: _show(),           default=True),
+        pystray.MenuItem("Open Dashboard", lambda *_: _open_dashboard()),
         pystray.Menu.SEPARATOR,
-        pystray.MenuItem("Refresh",          lambda *_: do_refresh()),
+        pystray.MenuItem("Refresh",        lambda *_: _do_refresh()),
         pystray.Menu.SEPARATOR,
-        pystray.MenuItem("Exit Agent UI",    do_exit),
+        pystray.MenuItem("Exit Agent UI",  _do_exit),
     )
+    icon = pystray.Icon("TelemetryAgent", _make_tray_icon(), "TelemetryAgent", menu)
 
-    icon = pystray.Icon(
-        "TelemetryAgent",
-        _make_tray_icon(GREEN),
-        "TelemetryAgent",
-        menu,
-    )
-
-    # Update icon colour + tooltip every 10 s
     def _updater():
         while True:
             time.sleep(10)
@@ -916,7 +1415,7 @@ def run_tray(root: tk.Tk):
                 if status:
                     locked = status.get("locked", False)
                     active = status.get("active", False)
-                    col = RED if locked else (GREEN if active else YELLOW)
+                    col    = "#dc2626" if locked else ("#16a34a" if active else "#d97706")
                     icon.icon = _make_tray_icon(col)
                 icon.title = _tooltip_text()
             except Exception:
@@ -926,37 +1425,16 @@ def run_tray(root: tk.Tk):
     icon.run()
 
 
-def _open_popup(root: tk.Tk, ref: list):
-    popup = PopupWindow(root)
-    ref[0] = popup
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Helpers
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def _fmt_time(secs: int) -> str:
-    if secs <= 0:
-        return "0m"
-    h, m = divmod(secs, 3600)
-    m = m // 60
-    return f"{h}h {m}m" if h else f"{m}m"
-
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # Entry point
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def main():
-    # Tkinter must live on the main thread
+    check_for_update()
     root = tk.Tk()
-    root.withdraw()            # hidden root — we only show Toplevel popups
+    root.withdraw()
     root.title("TelemetryAgent UI")
-
-    # System tray runs in background daemon thread
-    tray_thread = threading.Thread(target=run_tray, args=(root,), daemon=True)
-    tray_thread.start()
-
+    threading.Thread(target=run_tray, args=(root,), daemon=True).start()
     root.mainloop()
 
 

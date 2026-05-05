@@ -1,20 +1,19 @@
 # -*- mode: python ; coding: utf-8 -*-
 #
-# PyInstaller spec for telemetry_ui.exe
+# PyInstaller spec for telemetry_ui  (--onedir)
 #
-# Build (from repo root, with the same venv as the agent):
-#   pip install pystray pillow requests
+# Build:
 #   pyinstaller telemetry_ui.spec
+#   Compress-Archive -Path "dist\telemetry_ui\*" -DestinationPath "dist\telemetry_ui.zip" -Force
 #
-# Output: dist/telemetry_ui.exe  (target < 30 MB, no runtime dependencies)
+# Upload:
+#   az storage blob upload ... --name telemetry_ui.zip --file dist\telemetry_ui.zip
 
 a = Analysis(
     ["telemetry_ui.py"],
     pathex=[],
     binaries=[],
-    datas=[
-        ("agent.config.json", "."),   # bundled bootstrap config
-    ],
+    datas=[("agent.config.json", ".")],
     hiddenimports=[
         "PIL._tkinter_finder",
         "pystray._win32",
@@ -24,9 +23,8 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        # Trim unused stdlib/PIL extras to keep size down
         "PIL.ImageQt",
-        "PIL.ImageTk",   # we don't use ImageTk (canvas only)
+        "PIL.ImageTk",
         "matplotlib",
         "numpy",
         "scipy",
@@ -43,17 +41,24 @@ pyz = PYZ(a.pure, a.zipped_data)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
     [],
+    exclude_binaries=True,
     name="telemetry_ui",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
+    console=False,
+    icon=None,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=False,
     upx_exclude=[],
-    runtime_tmpdir=None,
-    console=False,   # no console window
-    icon=None,       # replace with a .ico path if available
+    name="telemetry_ui",
 )

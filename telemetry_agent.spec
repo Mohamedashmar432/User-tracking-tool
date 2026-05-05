@@ -1,17 +1,24 @@
 # -*- mode: python ; coding: utf-8 -*-
 #
-# PyInstaller spec for telemetry_agent.exe
+# PyInstaller spec for telemetry_agent  (--onedir)
 #
-# Build command (run from repo root, venv active):
+# WHY --onedir:
+#   --onefile extracts python311.dll to a NEW _MEI* dir on EVERY startup.
+#   Windows Defender scans newly-written DLLs regardless of ExclusionPath rules,
+#   and quarantines them.  --onedir writes all DLLs ONCE to the install directory
+#   at deploy time (inside a Defender-excluded path) and never touches them again.
+#
+# Build:
 #   pyinstaller telemetry_agent.spec
+#   Compress-Archive -Path "dist\telemetry_agent\*" -DestinationPath "dist\telemetry_agent.zip" -Force
 #
-# Output: dist/telemetry_agent.exe  (~15-25 MB single file, no console window)
+# Upload:
+#   az storage blob upload ... --name telemetry_agent.zip --file dist\telemetry_agent.zip
 
 a = Analysis(
     ["telemetry_agent.py"],
     pathex=[],
     binaries=[],
-    # Bundle agent.config.json so the EXE has a bootstrap URL before install
     datas=[("agent.config.json", ".")],
     hiddenimports=[
         "win32api",
@@ -33,17 +40,25 @@ pyz = PYZ(a.pure, a.zipped_data)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
     [],
+    exclude_binaries=True,
     name="telemetry_agent",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
-    console=False,      # no console window in production
+    upx=False,
+    console=False,
     icon=None,
+    version="version_info.txt",
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    name="telemetry_agent",
 )

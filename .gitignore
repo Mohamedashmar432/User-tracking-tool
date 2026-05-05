@@ -34,3 +34,13 @@ uninstall-agent.ps1
 # Legacy / scratch files
 server.py
 migrate.py
+
+# Screenshots and image captures
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+
+# Local development test scripts (not part of the deployable product)
+test_*.py

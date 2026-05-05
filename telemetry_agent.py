@@ -34,7 +34,7 @@ Flush triggers (whichever comes first)
 Offline backup
 --------------
 Layout : <TEMP>/telemetry_backup/<username>/batch_<timestamp>.json
-Cap    : MAX_BACKUP_EVENTS (100) total events on disk — oldest evicted first
+Cap    : MAX_BACKUP_EVENTS (500) total events on disk — oldest evicted first
 Replay : oldest-first; stops at first failure so partial recovery is safe
 
 Batch payload sent to POST /ingest
@@ -116,7 +116,7 @@ _cfg = _load_config()
 # ── Configuration ───────────────────────────────────────────────────────────────
 
 IDLE_THRESHOLD    = _cfg.get("idle_threshold",  300)  # seconds
-AGENT_VERSION     = "2.6"   # bump this before every EXE build
+AGENT_VERSION     = "2.9"   # bump this before every EXE build
 
 TICK_INTERVAL     = _cfg.get("tick_interval",    5)   # seconds
 LOG_INTERVAL      = _cfg.get("log_interval",    30)   # seconds — 30s balances granularity vs storage cost
@@ -295,7 +295,7 @@ _LOG = logging.getLogger("telemetry_agent")
 def _setup_logging() -> None:
     """
     Configure _LOG with:
-      - FileHandler  → C:\\ProgramData\\TelemetryAgent\\agent.log  (always)
+      - FileHandler  ->C:\\ProgramData\\TelemetryAgent\\agent.log  (always)
       - StreamHandler → stdout  (only when a console is attached)
     Safe to call multiple times (guards against duplicate handlers).
     """
@@ -380,43 +380,6 @@ def get_idle_seconds() -> int:
         return 0
 
 
-# ── Windows DPAPI — user-bound encryption for backup files ──────────────────────
-# CryptProtectData binds the ciphertext to the current Windows user account.
-# Only the same user (same Windows profile / domain credential) can decrypt.
-# Uses crypt32.dll which ships on every Windows version — no extra dependencies.
-
-class _CryptBlob(ctypes.Structure):
-    _fields_ = [("cbData", ctypes.c_uint32), ("pbData", ctypes.POINTER(ctypes.c_byte))]
-
-
-def _dpapi_encrypt(plaintext: bytes) -> bytes:
-    buf      = ctypes.create_string_buffer(plaintext, len(plaintext))
-    in_blob  = _CryptBlob(len(plaintext), ctypes.cast(buf, ctypes.POINTER(ctypes.c_byte)))
-    out_blob = _CryptBlob()
-    ok = ctypes.windll.crypt32.CryptProtectData(
-        ctypes.byref(in_blob), None, None, None, None, 0, ctypes.byref(out_blob)
-    )
-    if not ok:
-        raise OSError(f"CryptProtectData failed (error {ctypes.GetLastError()})")
-    try:
-        return bytes(out_blob.pbData[:out_blob.cbData])
-    finally:
-        ctypes.windll.kernel32.LocalFree(out_blob.pbData)
-
-
-def _dpapi_decrypt(ciphertext: bytes) -> bytes:
-    buf      = ctypes.create_string_buffer(ciphertext, len(ciphertext))
-    in_blob  = _CryptBlob(len(ciphertext), ctypes.cast(buf, ctypes.POINTER(ctypes.c_byte)))
-    out_blob = _CryptBlob()
-    ok = ctypes.windll.crypt32.CryptUnprotectData(
-        ctypes.byref(in_blob), None, None, None, None, 0, ctypes.byref(out_blob)
-    )
-    if not ok:
-        raise OSError(f"CryptUnprotectData failed (error {ctypes.GetLastError()})")
-    try:
-        return bytes(out_blob.pbData[:out_blob.cbData])
-    finally:
-        ctypes.windll.kernel32.LocalFree(out_blob.pbData)
 
 
 LOCK_SCREEN_PROCESSES = frozenset({"lockapp.exe", "logonui.exe"})
@@ -535,12 +498,9 @@ def _backup_dir(username: str) -> str:
 
 
 def _backup_files(username: str) -> list:
-    """Sorted list of backup file paths (encrypted .bin + legacy .json), oldest first."""
+    """Sorted list of backup file paths, oldest first."""
     d = _backup_dir(username)
-    return sorted(
-        glob.glob(os.path.join(d, "batch_*.bin")) +
-        glob.glob(os.path.join(d, "batch_*.json"))
-    )
+    return sorted(glob.glob(os.path.join(d, "batch_*.json")))
 
 
 def save_to_backup(username: str, device: str, events: list) -> None:
@@ -558,12 +518,8 @@ def save_to_backup(username: str, device: str, events: list) -> None:
     counts = []
     for fpath in files:
         try:
-            if fpath.endswith(".bin"):
-                raw = _dpapi_decrypt(open(fpath, "rb").read())
-                n = len(json.loads(raw).get("events", []))
-            else:
-                with open(fpath, encoding="utf-8") as fh:
-                    n = len(json.load(fh).get("events", []))
+            with open(fpath, encoding="utf-8") as fh:
+                n = len(json.load(fh).get("events", []))
         except Exception:
             n = 0
         total += n
@@ -580,15 +536,14 @@ def save_to_backup(username: str, device: str, events: list) -> None:
             pass
 
     ts    = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")
-    fpath = os.path.join(_backup_dir(username), f"batch_{ts}.bin")
+    fpath = os.path.join(_backup_dir(username), f"batch_{ts}.json")
     try:
-        raw   = json.dumps({"user": username, "device": device, "events": events}).encode()
-        cipher = _dpapi_encrypt(raw)
-        with open(fpath, "wb") as f:
-            f.write(cipher)
-        print(f"  [backup] {len(events)} events saved offline → {fpath}")
+        with open(fpath, "w", encoding="utf-8") as f:
+            json.dump({"user": username, "device": device, "events": events}, f)
     except Exception as e:
         print(f"  [backup] Disk write failed: {e}")
+        return
+    print(f"  [backup] {len(events)} events saved offline -> {fpath}")
 
 
 def flush_backup(username: str, device: str) -> int:
@@ -604,12 +559,8 @@ def flush_backup(username: str, device: str) -> int:
     recovered = 0
     for fpath in files:
         try:
-            if fpath.endswith(".bin"):
-                raw     = _dpapi_decrypt(open(fpath, "rb").read())
-                payload = json.loads(raw)
-            else:
-                with open(fpath, encoding="utf-8") as f:
-                    payload = json.load(f)
+            with open(fpath, encoding="utf-8") as f:
+                payload = json.load(f)
         except Exception as e:
             print(f"  [backup] Skipping unreadable file {os.path.basename(fpath)}: {e}")
             continue
@@ -756,15 +707,15 @@ def flush_batch(user: str, device: str, batch: list) -> bool:
         )
         if resp.status_code in (200, 202):
             data = resp.json()
-            print(f"  → Batch sent: {data.get('accepted')}/{data.get('total')} events accepted")
+            print(f"  ->Batch sent: {data.get('accepted')}/{data.get('total')} events accepted")
             return True
-        print(f"  → Server rejected batch [{resp.status_code}]: {resp.text[:200]}")
+        print(f"  ->Server rejected batch [{resp.status_code}]: {resp.text[:200]}")
         return False
     except requests.exceptions.ConnectionError:
-        print(f"  → Server unreachable ({INGEST_URL}). Events buffered locally.")
+        print(f"  ->Server unreachable ({INGEST_URL}). Events buffered locally.")
         return False
     except Exception as e:
-        print(f"  → Flush error: {e}")
+        print(f"  ->Flush error: {e}")
         return False
 
 
@@ -820,46 +771,50 @@ def _ver(v: str) -> tuple:
 
 def _do_update(download_url: str, current_exe: str) -> None:
     """
-    Download new EXE to a temp file, then hand off to a detached .bat script
-    that waits for this process to exit, copies the file into place, and
-    re-launches the agent.  The bat deletes itself when done.
+    Download the new ZIP release, then hand off to a hidden PowerShell script
+    that waits for this process to exit, extracts the ZIP over the install
+    directory, unblocks all files, and re-launches the agent.
     """
+    install_dir = os.path.dirname(current_exe)
     tmp_dir  = os.path.join(tempfile.gettempdir(), "TelemetryAgent")
     os.makedirs(tmp_dir, exist_ok=True)
-    tmp_exe  = os.path.join(tmp_dir, "telemetry_agent_new.exe")
-    bat_path = os.path.join(tmp_dir, "updater.bat")
+    tmp_zip  = os.path.join(tmp_dir, "telemetry_agent_new.zip")
+    ps_path  = os.path.join(tmp_dir, "updater.ps1")
 
-    _LOG.info("Auto-update: downloading new EXE from %s", download_url)
+    _LOG.info("Auto-update: downloading from %s", download_url)
     try:
         with requests.get(download_url, stream=True, timeout=60, verify=True) as r:
             r.raise_for_status()
-            with open(tmp_exe, "wb") as f:
+            with open(tmp_zip, "wb") as f:
                 for chunk in r.iter_content(chunk_size=65536):
                     f.write(chunk)
     except Exception as e:
         _LOG.error("Auto-update: download failed — %s", e)
         return
 
-    # Validate — must be non-empty
-    if os.path.getsize(tmp_exe) < 1024:
+    if os.path.getsize(tmp_zip) < 1024:
         _LOG.error("Auto-update: downloaded file too small, aborting")
         return
 
     _LOG.info("Auto-update: download complete (%d bytes), preparing updater",
-              os.path.getsize(tmp_exe))
+              os.path.getsize(tmp_zip))
 
-    bat = (
-        "@echo off\n"
-        "timeout /t 3 /nobreak >nul\n"
-        f'copy /y "{tmp_exe}" "{current_exe}" >nul\n'
-        f'start "" "{current_exe}"\n'
-        'del "%~f0"\n'
-    )
-    with open(bat_path, "w", encoding="ascii") as f:
-        f.write(bat)
+    # Hidden PowerShell updater: waits for this process to exit, then extracts
+    # the ZIP over the install directory and re-launches.
+    ps_lines = [
+        "Start-Sleep -Seconds 3",
+        f"Expand-Archive -Path '{tmp_zip}' -DestinationPath '{install_dir}' -Force",
+        f"Get-ChildItem -Path '{install_dir}' -Recurse | Unblock-File -ErrorAction SilentlyContinue",
+        f"Remove-Item '{tmp_zip}' -Force -ErrorAction SilentlyContinue",
+        f"Start-Process '{current_exe}'",
+        "Remove-Item $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue",
+    ]
+    with open(ps_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(ps_lines))
 
     subprocess.Popen(
-        ["cmd.exe", "/c", bat_path],
+        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+         "-WindowStyle", "Hidden", "-File", ps_path],
         creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW,
         close_fds=True,
     )
@@ -882,12 +837,12 @@ def check_for_update() -> None:
     health_url  = f"{base}/api/health"
 
     try:
-        resp = requests.get(health_url, timeout=10)
+        resp = requests.get(health_url, timeout=10, verify=True)
         if not resp.ok:
             return
         data            = resp.json()
         server_version  = data.get("version", "0")
-        download_url    = data.get("agent_download_url", f"{base}/download-agent")
+        download_url    = data.get("agent_zip_download_url", f"{base}/download-agent-zip")
     except Exception as e:
         _LOG.debug("Auto-update check skipped: %s", e)
         return
@@ -902,30 +857,235 @@ def check_for_update() -> None:
         _LOG.info("Auto-update: up to date (v%s)", AGENT_VERSION)
 
 
-def _register_scheduled_task(exe_path: str) -> bool:
+def _schtasks_import_xml(task_name: str, xml: str) -> bool:
     """
-    Create (or replace) a Windows Scheduled Task named TelemetryAgent
-    that launches the agent at every user logon, silently.
-    Requires the calling process to have sufficient privileges.
+    Write a Task Scheduler XML to a temp file and import it via schtasks.exe.
+
+    Using schtasks /create /xml is the safest approach:
+    - No PowerShell, no script execution, no -ExecutionPolicy flags
+    - schtasks.exe is a signed native Windows binary → no Defender alerts
+    - XML written to PROGRAM_DATA (trusted directory, not temp)
+    - File is deleted immediately after import whether it succeeded or not
+
+    The subprocess call uses both CREATE_NO_WINDOW and STARTF_USESHOWWINDOW
+    so no console or window can appear even for a fraction of a second.
     """
-    cmd = [
-        "schtasks", "/create",
-        "/tn", "TelemetryAgent",
-        "/tr", f'"{exe_path}"',
-        "/sc", "ONLOGON",
-        "/rl", "HIGHEST",
-        "/f",                  # overwrite if already exists
-    ]
+    xml_path = os.path.join(PROGRAM_DATA, f"{task_name}.xml")
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30,
-                                creationflags=subprocess.CREATE_NO_WINDOW)
-        if result.returncode == 0:
+        os.makedirs(PROGRAM_DATA, exist_ok=True)
+        # schtasks expects UTF-16 LE with BOM; Python's 'utf-16' adds BOM on LE systems
+        with open(xml_path, "w", encoding="utf-16") as f:
+            f.write(xml)
+    except Exception as e:
+        _LOG.error("Could not write task XML for %s: %s", task_name, e)
+        return False
+
+    si = subprocess.STARTUPINFO()
+    si.dwFlags    |= subprocess.STARTF_USESHOWWINDOW
+    si.wShowWindow = 0  # SW_HIDE
+
+    try:
+        r = subprocess.run(
+            ["schtasks", "/create", "/tn", task_name, "/xml", xml_path, "/f"],
+            capture_output=True, text=True, timeout=30,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            startupinfo=si,
+        )
+        if r.returncode == 0:
             return True
-        _LOG.debug("schtasks stderr: %s", result.stderr.strip())
+        _LOG.debug("schtasks /xml import failed for %s: %s", task_name, r.stderr.strip())
         return False
     except Exception as e:
-        _LOG.error("schtasks failed: %s", e)
+        _LOG.error("schtasks import failed for %s: %s", task_name, e)
         return False
+    finally:
+        try:
+            os.remove(xml_path)
+        except Exception:
+            pass
+
+
+def _task_xml(exe_path: str, trigger_xml: str) -> str:
+    """Build a Task Scheduler v1.2 XML string with common settings."""
+    exe_escaped = (
+        exe_path
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+    return (
+        '<?xml version="1.0" encoding="UTF-16"?>\n'
+        '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">\n'
+        f"  <Triggers>{trigger_xml}</Triggers>\n"
+        "  <Actions Context=\"Author\">\n"
+        "    <Exec>\n"
+        f"      <Command>{exe_escaped}</Command>\n"
+        "    </Exec>\n"
+        "  </Actions>\n"
+        "  <Settings>\n"
+        "    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>\n"
+        "    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>\n"
+        "    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>\n"
+        "    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>\n"
+        "    <StartWhenAvailable>true</StartWhenAvailable>\n"
+        "    <Enabled>true</Enabled>\n"
+        "  </Settings>\n"
+        "  <Principals>\n"
+        "    <Principal id=\"Author\">\n"
+        "      <LogonType>InteractiveToken</LogonType>\n"
+        "      <RunLevel>HighestAvailable</RunLevel>\n"
+        "    </Principal>\n"
+        "  </Principals>\n"
+        "</Task>"
+    )
+
+
+def _register_scheduled_task(exe_path: str) -> bool:
+    """
+    Register TelemetryAgent — fires at every logon with restart-on-failure.
+
+    Uses schtasks /create /xml (no PowerShell, no script execution).
+    RestartOnFailure is a Settings element only available via XML import,
+    not the schtasks command-line flags.
+    """
+    trigger = (
+        "\n    <LogonTrigger>"
+        "\n      <RestartOnFailure>"
+        "\n        <Count>5</Count>"
+        "\n        <Interval>PT2M</Interval>"
+        "\n      </RestartOnFailure>"
+        "\n      <Enabled>true</Enabled>"
+        "\n    </LogonTrigger>"
+    )
+    xml = _task_xml(exe_path, trigger)
+    return _schtasks_import_xml("TelemetryAgent", xml)
+
+
+def _register_watchdog_task(exe_path: str) -> bool:
+    """
+    Register TelemetryAgentWatchdog — runs telemetry_agent.exe every 5 minutes.
+
+    The agent's own named mutex (_acquire_singleton) exits any duplicate
+    immediately, so this is safe to fire whether or not the main instance is
+    already running. No PowerShell, no PS1 file, no Defender exposure.
+    """
+    # StartBoundary in the past + StartWhenAvailable fires the task at logon
+    # even if the exact 5-minute mark was missed.
+    trigger = (
+        "\n    <TimeTrigger>"
+        "\n      <Repetition>"
+        "\n        <Interval>PT5M</Interval>"
+        "\n        <Duration>P9999D</Duration>"
+        "\n        <StopAtDurationEnd>false</StopAtDurationEnd>"
+        "\n      </Repetition>"
+        "\n      <StartBoundary>2020-01-01T00:00:00</StartBoundary>"
+        "\n      <Enabled>true</Enabled>"
+        "\n    </TimeTrigger>"
+    )
+    xml = _task_xml(exe_path, trigger)
+    return _schtasks_import_xml("TelemetryAgentWatchdog", xml)
+
+
+def _acquire_singleton() -> bool:
+    """
+    Acquire a named Windows mutex to enforce a single running instance.
+
+    Returns True  when this process is the first instance (mutex created).
+    Returns False when another instance already holds the mutex.
+
+    The mutex is released automatically when the process exits — no explicit
+    cleanup needed.  This is called at the very start of main() so watchdog-
+    triggered copies exit in under a second without starting the main loop,
+    making the 5-minute watchdog task safe to fire at all times.
+    """
+    try:
+        h = ctypes.windll.kernel32.CreateMutexW(None, True, "Global\\TelemetryAgentSingleton")
+        # ERROR_ALREADY_EXISTS (183) means another instance owns the mutex
+        return ctypes.windll.kernel32.GetLastError() != 183
+    except Exception:
+        return True  # if mutex check fails, allow this instance to continue
+
+
+def _register_run_key(exe_path: str) -> bool:
+    """
+    Add the agent to HKCU\\...\\Run as a third-layer startup guarantee.
+    This fires even if both scheduled tasks are removed, giving belt-and-suspenders
+    coverage for environments where Task Scheduler is restricted.
+    """
+    try:
+        import winreg
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Run",
+            0, winreg.KEY_SET_VALUE,
+        )
+        winreg.SetValueEx(key, "TelemetryAgent", 0, winreg.REG_SZ, f'"{exe_path}"')
+        winreg.CloseKey(key)
+        return True
+    except Exception as e:
+        _LOG.error("Registry Run key failed: %s", e)
+        return False
+
+
+def _ensure_startup_registered(exe_path: str) -> None:
+    """
+    Called at every agent startup (frozen mode only).
+
+    Verifies that all three startup hooks are still in place and silently
+    re-registers any that are missing.  This makes the agent self-healing:
+    if a user or admin accidentally deletes the task or Run key, it is
+    restored the next time the agent runs — without any manual intervention.
+    """
+    _si = subprocess.STARTUPINFO()
+    _si.dwFlags    |= subprocess.STARTF_USESHOWWINDOW
+    _si.wShowWindow = 0  # SW_HIDE
+
+    # 1. Main scheduled task
+    try:
+        r = subprocess.run(
+            ["schtasks", "/query", "/tn", "TelemetryAgent"],
+            capture_output=True, timeout=10,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            startupinfo=_si,
+        )
+        if r.returncode != 0:
+            _LOG.warning("TelemetryAgent task missing — re-registering")
+            _register_scheduled_task(exe_path)
+    except Exception as e:
+        _LOG.warning("Could not verify TelemetryAgent task: %s", e)
+
+    # 2. Watchdog task
+    try:
+        r = subprocess.run(
+            ["schtasks", "/query", "/tn", "TelemetryAgentWatchdog"],
+            capture_output=True, timeout=10,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            startupinfo=_si,
+        )
+        if r.returncode != 0:
+            _LOG.warning("TelemetryAgentWatchdog task missing — re-registering")
+            _register_watchdog_task(exe_path)
+    except Exception as e:
+        _LOG.warning("Could not verify watchdog task: %s", e)
+
+    # 3. Registry Run key
+    try:
+        import winreg
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Run",
+            0, winreg.KEY_READ,
+        )
+        try:
+            winreg.QueryValueEx(key, "TelemetryAgent")
+        except FileNotFoundError:
+            _LOG.warning("Registry Run key missing — re-adding")
+            _register_run_key(exe_path)
+        finally:
+            winreg.CloseKey(key)
+    except Exception as e:
+        _LOG.warning("Could not verify registry Run key: %s", e)
 
 
 def install(server_url: str = None, admin_key: str = None) -> None:
@@ -960,21 +1120,26 @@ def install(server_url: str = None, admin_key: str = None) -> None:
             _LOG.error("  Permission denied creating %s — run as Administrator", d)
             sys.exit(1)
 
-    # 2. Resolve base server URL from public /agent-config
-    base = (server_url or _base_url()).rstrip("/")
+    # 2. Resolve base server URL and shared agent key from /agent-config
+    base      = (server_url or _base_url()).rstrip("/")
+    agent_key = ""
     try:
-        resp = requests.get(f"{base}/agent-config", timeout=10)
+        resp = requests.get(f"{base}/agent-config", timeout=10, verify=True)
         if resp.ok:
-            fetched = resp.json().get("server_url", "").rstrip("/")
+            cfg = resp.json()
+            fetched = cfg.get("server_url", "").rstrip("/")
             if fetched:
                 _LOG.info("  /agent-config returned server_url: %s", fetched)
                 base = fetched
+            # Pick up the shared AGENT_API_KEY served by the server
+            agent_key = cfg.get("agent_api_key", "")
+            if agent_key:
+                _LOG.info("  Agent API key received from /agent-config")
     except Exception as e:
         _LOG.warning("  Could not fetch /agent-config: %s — using %s", e, base)
 
-    # 3. Register device → get per-user key (admin_key used once, never stored)
-    username  = getpass.getuser()
-    agent_key = ""
+    # 3. Optionally register device for a per-user key (overrides the shared key)
+    username = getpass.getuser()
     if admin_key:
         try:
             resp = requests.post(
@@ -984,22 +1149,15 @@ def install(server_url: str = None, admin_key: str = None) -> None:
                 timeout=10,
             )
             if resp.ok:
-                agent_key = resp.json().get("agent_key", "")
-                _LOG.info("  Device registered — per-user key issued (length %d)", len(agent_key))
+                per_user_key = resp.json().get("agent_key", "")
+                if per_user_key:
+                    agent_key = per_user_key
+                    _LOG.info("  Device registered — per-user key issued (length %d)", len(agent_key))
             else:
-                _LOG.warning(
-                    "  /api/register-device returned HTTP %d — "
-                    "agent will run without a key (server may reject /ingest)",
-                    resp.status_code,
-                )
+                _LOG.warning("  /api/register-device returned HTTP %d", resp.status_code)
         except Exception as e:
             _LOG.warning("  Device registration failed: %s", e)
         # admin_key goes out of scope here — never written anywhere
-    else:
-        _LOG.warning(
-            "  No --admin-key supplied — agent key not registered. "
-            "Pass --admin-key <key> to enable secure per-user authentication."
-        )
 
     # 4. Write config.json  (admin key is ABSENT — only the per-user key is stored)
     config = {
@@ -1035,14 +1193,24 @@ def install(server_url: str = None, admin_key: str = None) -> None:
         exe_dest = os.path.abspath(sys.argv[0])
         _LOG.info("  Script mode — scheduled task will run: %s", exe_dest)
 
-    # 5. Register scheduled task
+    # 5. Register startup hooks (three layers for self-healing coverage)
     if _register_scheduled_task(exe_dest):
-        _LOG.info("  Scheduled task 'TelemetryAgent' registered (trigger: ONLOGON)")
+        _LOG.info("  Scheduled task 'TelemetryAgent' registered (ONLOGON, restart-on-failure x5)")
     else:
         _LOG.error(
             "  Scheduled task registration failed — "
             "re-run as Administrator or create the task manually"
         )
+
+    if _register_watchdog_task(exe_dest):
+        _LOG.info("  Watchdog task 'TelemetryAgentWatchdog' registered (every 5 min)")
+    else:
+        _LOG.warning("  Watchdog task registration failed — non-critical, agent will still start at logon")
+
+    if _register_run_key(exe_dest):
+        _LOG.info("  Registry Run key added (HKCU\\...\\Run\\TelemetryAgent)")
+    else:
+        _LOG.warning("  Registry Run key failed — non-critical")
 
     # 6. Connection check
     if check_connection(retries=3, delay=3):
@@ -1090,35 +1258,76 @@ def uninstall() -> None:
     """
     _LOG.info("=== Telemetry Agent Uninstall ===")
 
-    # 1. Stop scheduled task
-    try:
-        subprocess.call(
-            ["schtasks", "/delete", "/tn", "TelemetryAgent", "/f"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
-        _LOG.info("  Scheduled task removed")
-    except Exception as e:
-        _LOG.warning("  Could not remove scheduled task: %s", e)
+    # 1. Remove all startup hooks
+    for task in ("TelemetryAgent", "TelemetryAgentWatchdog"):
+        try:
+            subprocess.call(
+                ["schtasks", "/delete", "/tn", task, "/f"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            _LOG.info("  Scheduled task removed: %s", task)
+        except Exception as e:
+            _LOG.warning("  Could not remove task %s: %s", task, e)
 
-    # 2. Kill other running agent processes (not self)
     try:
-        import psutil
+        import winreg
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Run",
+            0, winreg.KEY_SET_VALUE,
+        )
+        try:
+            winreg.DeleteValue(key, "TelemetryAgent")
+            _LOG.info("  Registry Run key removed")
+        except FileNotFoundError:
+            pass
+        winreg.CloseKey(key)
+    except Exception as e:
+        _LOG.warning("  Could not remove registry Run key: %s", e)
+
+    # 2. Kill other running agent processes (not self) and wait for them to exit
+    procs_killed = []
+    try:
         for proc in psutil.process_iter(["pid", "name"]):
             if proc.info["name"] == "telemetry_agent.exe" and proc.pid != os.getpid():
-                proc.terminate()
-                _LOG.info("  Terminated PID %d", proc.pid)
+                try:
+                    proc.terminate()
+                    procs_killed.append(proc)
+                    _LOG.info("  Terminated PID %d", proc.pid)
+                except Exception:
+                    pass
     except Exception as e:
-        _LOG.warning("  Could not terminate running agents: %s", e)
+        _LOG.warning("  Could not enumerate processes: %s", e)
 
-    # 3–6. Delete local directories
+    for proc in procs_killed:
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+    if procs_killed:
+        time.sleep(2)   # let Windows release file locks after process death
+
+    # 3–6. Delete local directories (including _MEI* PyInstaller extraction dirs)
     username = getpass.getuser()
     paths_to_remove = [
         INSTALL_DIR,
-        PROGRAM_DATA,
         os.path.join(tempfile.gettempdir(), "TelemetryAgent"),
         os.path.join(tempfile.gettempdir(), "telemetry_backup", username),
     ]
+    # Clean up PyInstaller extraction subdirs before removing PROGRAM_DATA root
+    for mei_dir in glob.glob(os.path.join(PROGRAM_DATA, "_MEI*")):
+        try:
+            shutil.rmtree(mei_dir, ignore_errors=True)
+            _LOG.info("  Removed extraction dir: %s", mei_dir)
+        except Exception as e:
+            _LOG.warning("  Could not remove %s: %s", mei_dir, e)
+    paths_to_remove.append(PROGRAM_DATA)
+
     for path in paths_to_remove:
         try:
             shutil.rmtree(path, ignore_errors=True)
@@ -1127,8 +1336,13 @@ def uninstall() -> None:
             _LOG.warning("  Could not remove %s: %s", path, e)
 
     _LOG.info("=== Uninstall complete — cloud data is not affected ===")
-    print("\nTelemetry Agent has been removed from this machine.")
-    print("Cloud data is not affected. Re-run the installer to re-onboard.\n")
+    print()
+    print("=" * 50)
+    print("  Telemetry Agent uninstalled successfully.")
+    print("  All local files and scheduled tasks removed.")
+    print("  Cloud data is not affected.")
+    print("=" * 50)
+    print()
 
 
 # ── Main loop ───────────────────────────────────────────────────────────────────
@@ -1164,8 +1378,24 @@ def main():
         uninstall()
         return
 
+    # ── Single-instance guard ─────────────────────────────────────────────────
+    # The watchdog task fires every 5 minutes and starts this EXE directly.
+    # If the main instance is already running, _acquire_singleton returns False
+    # and the watchdog-spawned copy exits here in under a second — no main loop,
+    # no network calls, no logging.  Only the first instance passes this gate.
+    if getattr(sys, "frozen", False) and not _acquire_singleton():
+        sys.exit(0)
+
     # ── Auto-update check (frozen EXE only; exits+restarts if newer available) ─
     check_for_update()
+
+    # ── Self-heal startup registrations on every run ──────────────────────────
+    # Silently re-registers the scheduled task, watchdog, and registry Run key
+    # if any of them have been removed since the last run. This ensures the
+    # agent survives accidental task deletion or profile resets without any
+    # manual re-installation.
+    if getattr(sys, "frozen", False):
+        _ensure_startup_registered(sys.executable)
 
     # ── Normal run ────────────────────────────────────────────────────────────
     user_info = get_user_info()

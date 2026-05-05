@@ -1,0 +1,30 @@
+# Normalize line endings: store as LF, check out as native
+* text=auto
+
+# Force LF for files that must stay LF on all platforms
+*.py    text eol=lf
+*.sh    text eol=lf
+*.md    text eol=lf
+*.json  text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+*.txt   text eol=lf
+*.html  text eol=lf
+*.css   text eol=lf
+*.js    text eol=lf
+
+# Windows-specific scripts — keep CRLF
+*.ps1   text eol=crlf
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+
+# True binaries — no line-ending conversion
+*.exe   binary
+*.zip   binary
+*.dll   binary
+*.pyd   binary
+*.ico   binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary

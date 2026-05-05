@@ -8,6 +8,8 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
         body { font-family: 'Inter', sans-serif; }
@@ -49,13 +51,13 @@
                 <label class="block text-xs font-semibold text-slate-500 uppercase mb-1.5">Username</label>
                 <input id="loginUsername" type="text" autocomplete="username" required
                        class="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500"
-                       placeholder="admin">
+                       placeholder="">
             </div>
             <div>
                 <label class="block text-xs font-semibold text-slate-500 uppercase mb-1.5">Password</label>
                 <input id="loginPassword" type="password" autocomplete="current-password" required
                        class="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500"
-                       placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;">
+                       placeholder="">
             </div>
             <div id="loginError" class="hidden text-xs text-rose-600 bg-rose-50 px-3 py-2 rounded-lg"></div>
             <button type="submit" id="loginBtn"
@@ -164,8 +166,12 @@
                     <p class="text-sm text-slate-400 mt-0.5">Today's productivity across all employees</p>
                 </div>
                 <div class="flex items-center gap-3">
-                    <input type="date" id="overviewDatePicker"
-                           class="px-3 py-2 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500 bg-white">
+                    <button onclick="openDatePicker('overview', this)" id="overviewDateBtn"
+                            class="flex items-center gap-2 px-4 py-2.5 border border-slate-200 rounded-xl text-sm font-medium bg-white hover:bg-slate-50 text-slate-700 transition-colors shadow-sm">
+                        <i data-lucide="calendar" class="w-4 h-4 text-indigo-500"></i>
+                        <span class="cal-btn-text">Today</span>
+                        <i data-lucide="chevron-down" class="w-3.5 h-3.5 text-slate-400 ml-1"></i>
+                    </button>
                     <button onclick="loadOverview()" class="p-2 border border-slate-200 rounded-lg hover:bg-white transition-all text-slate-500" title="Refresh">
                         <i data-lucide="refresh-cw" class="w-4 h-4"></i>
                     </button>
@@ -175,55 +181,78 @@
             <!-- Stats row -->
             <div class="grid grid-cols-3 gap-4 mb-6">
                 <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
-                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide">Total Employees</p>
+                    <p id="statTotalLabel" class="text-xs font-semibold text-slate-400 uppercase tracking-wide">Total Employees</p>
                     <p id="statTotal" class="text-3xl font-black text-slate-800 mt-1">—</p>
                 </div>
                 <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
-                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide">Active Now</p>
+                    <p id="statActiveLabel" class="text-xs font-semibold text-slate-400 uppercase tracking-wide">Active Now</p>
                     <p id="statActive" class="text-3xl font-black text-emerald-600 mt-1">—</p>
                 </div>
                 <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
-                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide">Avg Productivity</p>
+                    <p id="statAvgLabel" class="text-xs font-semibold text-slate-400 uppercase tracking-wide">Avg Productivity</p>
                     <p id="statAvgScore" class="text-3xl font-black text-indigo-600 mt-1">—</p>
                 </div>
             </div>
 
-            <!-- Teams / Groups rows -->
-            <div id="dashTeamsSection" class="mb-6">
-                <div class="flex items-center justify-between mb-3">
-                    <h3 class="font-bold text-slate-800">Projects / Teams / Groups</h3>
-                    <span id="dashTeamsLoading" class="text-xs text-slate-400 hidden flex items-center gap-1">
-                        <i data-lucide="loader-2" class="w-3 h-3 animate-spin"></i> Loading...
-                    </span>
+            <!-- Day content: teams + rankings table -->
+            <div id="overviewDayContent">
+                <!-- Teams / Groups rows -->
+                <div id="dashTeamsSection" class="mb-6">
+                    <div class="flex items-center justify-between mb-3">
+                        <h3 class="font-bold text-slate-800">Projects / Teams / Groups</h3>
+                        <span id="dashTeamsLoading" class="text-xs text-slate-400 hidden flex items-center gap-1">
+                            <i data-lucide="loader-2" class="w-3 h-3 animate-spin"></i> Loading...
+                        </span>
+                    </div>
+                    <div id="dashTeamsGrid" class="space-y-2"></div>
+                    <div id="dashTeamsEmpty" class="hidden text-xs text-slate-400 py-2">No project teams created yet.</div>
                 </div>
-                <div id="dashTeamsGrid" class="space-y-2"></div>
-                <div id="dashTeamsEmpty" class="hidden text-xs text-slate-400 py-2">No project teams created yet.</div>
+
+                <!-- User table -->
+                <div id="rankingsCard" class="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+                    <div class="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+                        <h3 class="font-bold text-slate-800">Productivity Rankings</h3>
+                        <span id="overviewLoading" class="text-xs text-slate-400 flex items-center gap-1.5">
+                            <i data-lucide="loader-2" class="w-3 h-3 animate-spin"></i> Loading...
+                        </span>
+                    </div>
+                    <table class="w-full text-sm">
+                        <thead class="bg-slate-50 text-slate-500 uppercase text-xs font-semibold">
+                            <tr>
+                                <th class="px-6 py-3 text-left">Employee</th>
+                                <th class="px-6 py-3 text-center">Productivity</th>
+                                <th class="px-6 py-3 text-center">Active Time</th>
+                                <th class="px-6 py-3 text-center">Status</th>
+                                <th class="px-6 py-3"></th>
+                            </tr>
+                        </thead>
+                        <tbody id="overviewTableBody" class="divide-y divide-slate-100"></tbody>
+                    </table>
+                    <div id="overviewEmpty" class="hidden p-12 text-center text-slate-400">
+                        <i data-lucide="users" class="w-10 h-10 mx-auto mb-3 text-slate-300"></i>
+                        <p class="font-medium">No employees found</p>
+                        <p class="text-xs mt-1">Install the agent on employee machines to start tracking</p>
+                    </div>
+                </div>
             </div>
 
-            <!-- User table -->
-            <div class="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
-                <div class="flex items-center justify-between px-6 py-4 border-b border-slate-100">
-                    <h3 class="font-bold text-slate-800">Productivity Rankings</h3>
-                    <span id="overviewLoading" class="text-xs text-slate-400 flex items-center gap-1.5">
-                        <i data-lucide="loader-2" class="w-3 h-3 animate-spin"></i> Loading...
-                    </span>
+            <!-- Range content: team chart + top apps (shown for 7d / 30d) -->
+            <div id="overviewRangePanel" class="hidden space-y-6">
+                <div class="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+                    <h3 class="font-bold text-slate-800 mb-5">Daily Team Activity</h3>
+                    <div class="chart-container"><canvas id="overviewRangeLineChart"></canvas></div>
                 </div>
-                <table class="w-full text-sm">
-                    <thead class="bg-slate-50 text-slate-500 uppercase text-xs font-semibold">
-                        <tr>
-                            <th class="px-6 py-3 text-left">Employee</th>
-                            <th class="px-6 py-3 text-center">Productivity</th>
-                            <th class="px-6 py-3 text-center">Active Time</th>
-                            <th class="px-6 py-3 text-center">Status</th>
-                            <th class="px-6 py-3"></th>
-                        </tr>
-                    </thead>
-                    <tbody id="overviewTableBody" class="divide-y divide-slate-100"></tbody>
-                </table>
-                <div id="overviewEmpty" class="hidden p-12 text-center text-slate-400">
-                    <i data-lucide="users" class="w-10 h-10 mx-auto mb-3 text-slate-300"></i>
-                    <p class="font-medium">No employees found</p>
-                    <p class="text-xs mt-1">Install the agent on employee machines to start tracking</p>
+                <div class="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+                    <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+                        <h3 class="font-bold text-slate-800">Top Team Applications</h3>
+                        <span id="overviewRangeLoading" class="hidden text-xs text-slate-400 flex items-center gap-1.5">
+                            <i data-lucide="loader-2" class="w-3 h-3 animate-spin"></i> Loading...
+                        </span>
+                    </div>
+                    <div id="overviewRangeAppsBody" class="divide-y divide-slate-100"></div>
+                    <div id="overviewRangeAppsEmpty" class="hidden p-10 text-center text-slate-400">
+                        <p class="text-sm">No application data for this period.</p>
+                    </div>
                 </div>
             </div>
         </div>
@@ -238,6 +267,12 @@
                     <p class="text-sm text-slate-400 mt-0.5">All onboarded employees</p>
                 </div>
                 <div class="flex items-center gap-3">
+                    <button onclick="openDatePicker('emp', this)" id="empDateBtn"
+                            class="flex items-center gap-2 px-4 py-2.5 border border-slate-200 rounded-xl text-sm font-medium bg-white hover:bg-slate-50 text-slate-700 transition-colors shadow-sm">
+                        <i data-lucide="calendar" class="w-4 h-4 text-indigo-500"></i>
+                        <span class="cal-btn-text">Today</span>
+                        <i data-lucide="chevron-down" class="w-3.5 h-3.5 text-slate-400 ml-1"></i>
+                    </button>
                     <div class="relative">
                         <i data-lucide="search" class="absolute left-3 top-2.5 w-3.5 h-3.5 text-slate-400 pointer-events-none"></i>
                         <input type="text" id="empSearch" placeholder="Search employee..." oninput="filterEmpList(this.value)"
@@ -301,13 +336,22 @@
                     </div>
                 </div>
                 <div class="flex items-center gap-3">
-                    <input type="date" id="datePicker" class="px-3 py-2 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500 bg-white">
+                    <input type="date" id="datePicker" class="hidden">
+                    <button onclick="openDatePicker('user', this)" id="userDateBtn"
+                            class="flex items-center gap-2 px-4 py-2.5 border border-slate-200 rounded-xl text-sm font-medium bg-white hover:bg-slate-50 text-slate-700 transition-colors shadow-sm">
+                        <i data-lucide="calendar" class="w-4 h-4 text-indigo-500"></i>
+                        <span class="cal-btn-text">Today</span>
+                        <i data-lucide="chevron-down" class="w-3.5 h-3.5 text-slate-400 ml-1"></i>
+                    </button>
                     <div class="flex items-center gap-2 px-3 py-2 rounded-full bg-indigo-50 text-indigo-600 text-xs font-bold uppercase">
                         <i data-lucide="refresh-cw" class="w-3 h-3 animate-spin"></i>
                         Live
                     </div>
                 </div>
             </header>
+
+            <!-- Today view: KPI cards + existing charts (hidden in range mode) -->
+            <div id="userDayContent">
 
             <!-- KPI Cards -->
             <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-5">
@@ -340,7 +384,7 @@
             </div>
 
             <!-- Charts -->
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-8">
                 <!-- Time Distribution doughnut (Productive vs Unproductive) -->
                 <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
                     <h3 class="font-bold text-slate-800 mb-5">Time Distribution</h3>
@@ -361,7 +405,7 @@
             </div>
 
             <!-- 24h Peak Activity chart -->
-            <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+            <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm mt-8">
                 <div class="flex items-center justify-between mb-1">
                     <h3 class="font-bold text-slate-800">24-Hour Activity Pattern</h3>
                     <div class="flex items-center gap-3 text-xs text-slate-400">
@@ -374,7 +418,7 @@
             </div>
 
             <!-- App table -->
-            <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+            <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden mt-8">
                 <div class="px-6 py-4 border-b border-slate-100 font-bold text-slate-800">Application Details</div>
                 <table class="w-full text-left text-sm table-fixed">
                     <colgroup><col><col class="w-32"><col class="w-32"></colgroup>
@@ -388,6 +432,55 @@
                     <tbody id="appTableBody" class="divide-y divide-slate-100"></tbody>
                 </table>
             </div>
+
+            </div><!-- /userDayContent -->
+
+            <!-- Range panel (hidden in Today mode) -->
+            <div id="userRangePanel" class="hidden space-y-6">
+
+                <!-- Summary stats -->
+                <div class="grid grid-cols-3 gap-5">
+                    <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                        <p class="text-xs font-bold text-slate-400 uppercase">Total Productive Hours</p>
+                        <p id="rangeProdHours" class="text-3xl font-black text-indigo-600 mt-1">—</p>
+                    </div>
+                    <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                        <p class="text-xs font-bold text-slate-400 uppercase">Avg Productivity Score</p>
+                        <p id="rangeAvgScore" class="text-3xl font-black text-slate-800 mt-1">—</p>
+                    </div>
+                    <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                        <p class="text-xs font-bold text-slate-400 uppercase">Total Active Hours</p>
+                        <p id="rangeActiveHours" class="text-3xl font-black text-emerald-600 mt-1">—</p>
+                    </div>
+                </div>
+
+                <!-- Line chart -->
+                <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+                    <h3 id="rangeChartTitle" class="font-bold text-slate-800 mb-1">Activity Over 7 Days</h3>
+                    <p class="text-xs text-slate-400 mb-4">Productive hours vs Active hours per day</p>
+                    <div class="relative" style="height:280px;">
+                        <canvas id="rangeLineChart"></canvas>
+                    </div>
+                </div>
+
+                <!-- Top apps table (no tab details) -->
+                <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                    <div class="px-6 py-4 border-b border-slate-100 font-bold text-slate-800">Application Usage</div>
+                    <table class="w-full text-sm">
+                        <thead class="bg-slate-50 text-slate-500 uppercase text-xs font-semibold">
+                            <tr>
+                                <th class="px-6 py-3 text-left">Application</th>
+                                <th class="px-6 py-3 text-center">Category</th>
+                                <th class="px-6 py-3 text-right">Total Hours</th>
+                            </tr>
+                        </thead>
+                        <tbody id="rangeAppsTableBody" class="divide-y divide-slate-100"></tbody>
+                    </table>
+                    <div id="rangeAppsTableEmpty" class="hidden p-8 text-center text-slate-400 text-sm">No data for this period.</div>
+                </div>
+
+            </div><!-- /userRangePanel -->
+
         </div>
 
         <!-- ============================================================
@@ -405,7 +498,13 @@
                     </div>
                 </div>
                 <div class="flex items-center gap-3">
-                    <input type="date" id="groupDatePicker" class="px-3 py-2 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500 bg-white">
+                    <input type="date" id="groupDatePicker" class="hidden">
+                    <button onclick="openDatePicker('group', this)" id="groupDateBtn"
+                            class="flex items-center gap-2 px-4 py-2.5 border border-slate-200 rounded-xl text-sm font-medium bg-white hover:bg-slate-50 text-slate-700 transition-colors shadow-sm">
+                        <i data-lucide="calendar" class="w-4 h-4 text-indigo-500"></i>
+                        <span class="cal-btn-text">Today</span>
+                        <i data-lucide="chevron-down" class="w-3.5 h-3.5 text-slate-400 ml-1"></i>
+                    </button>
                     <button id="addMemberBtn" onclick="openAddMemberModal()"
                             class="flex items-center gap-2 px-3 py-2 border border-purple-200 text-purple-600 text-xs font-semibold rounded-xl hover:bg-purple-50 transition-all">
                         <i data-lucide="user-plus" class="w-3.5 h-3.5"></i>
@@ -518,6 +617,7 @@
             <div class="flex gap-1 bg-slate-100 p-1 rounded-xl w-fit">
                 <button id="agentTabInstall"   onclick="switchAgentTab('install')"   class="agent-tab active px-4 py-1.5 rounded-lg text-sm font-semibold transition-all">Full Install</button>
                 <button id="agentTabUi"        onclick="switchAgentTab('ui')"        class="agent-tab px-4 py-1.5 rounded-lg text-sm font-semibold transition-all">UI Companion</button>
+                <button id="agentTabMigrate"   onclick="switchAgentTab('migrate')"   class="agent-tab px-4 py-1.5 rounded-lg text-sm font-semibold transition-all">Migrate</button>
                 <button id="agentTabUninstall" onclick="switchAgentTab('uninstall')" class="agent-tab px-4 py-1.5 rounded-lg text-sm font-semibold transition-all">Uninstall</button>
             </div>
 
@@ -673,6 +773,48 @@
                             <div class="flex gap-3"><span class="shrink-0 w-5 h-5 rounded-full bg-purple-100 text-purple-600 text-xs font-bold flex items-center justify-center mt-0.5">✓</span><div><p class="font-medium text-slate-700">Offline-first</p><p class="text-xs text-slate-400 mt-0.5">Today's data from local cache with &lt; 5 s lag; server enriches when reachable</p></div></div>
                             <div class="flex gap-3"><span class="shrink-0 w-5 h-5 rounded-full bg-purple-100 text-purple-600 text-xs font-bold flex items-center justify-center mt-0.5">✓</span><div><p class="font-medium text-slate-700">Top apps list</p><p class="text-xs text-slate-400 mt-0.5">Ranked by time spent, colour-coded by productivity category</p></div></div>
                         </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ── Tab: Migrate ── -->
+            <div id="agentPanelMigrate" class="space-y-5 hidden">
+                <div class="grid grid-cols-3 gap-4">
+                    <div class="bg-white rounded-2xl border border-amber-100 p-5 shadow-sm">
+                        <div class="w-8 h-8 bg-amber-100 rounded-xl flex items-center justify-center text-amber-600 mb-3"><i data-lucide="zap" class="w-4 h-4"></i></div>
+                        <h4 class="font-semibold text-slate-800 text-sm">1. Kills old agent</h4>
+                        <p class="text-xs text-slate-400 mt-1 leading-relaxed">Detects and force-stops any running telemetry process regardless of version or install location</p>
+                    </div>
+                    <div class="bg-white rounded-2xl border border-amber-100 p-5 shadow-sm">
+                        <div class="w-8 h-8 bg-amber-100 rounded-xl flex items-center justify-center text-amber-600 mb-3"><i data-lucide="trash-2" class="w-4 h-4"></i></div>
+                        <h4 class="font-semibold text-slate-800 text-sm">2. Wipes old install</h4>
+                        <p class="text-xs text-slate-400 mt-1 leading-relaxed">Removes all old dirs, scheduled tasks, and stale Defender exclusions before installing fresh</p>
+                    </div>
+                    <div class="bg-white rounded-2xl border border-emerald-100 p-5 shadow-sm">
+                        <div class="w-8 h-8 bg-emerald-100 rounded-xl flex items-center justify-center text-emerald-600 mb-3"><i data-lucide="refresh-cw" class="w-4 h-4"></i></div>
+                        <h4 class="font-semibold text-slate-800 text-sm">3. Clean reinstall</h4>
+                        <p class="text-xs text-slate-400 mt-1 leading-relaxed">Downloads and installs latest agent + UI companion exactly like a fresh install</p>
+                    </div>
+                </div>
+
+                <div class="bg-white rounded-3xl border border-amber-200 shadow-sm p-6">
+                    <div class="flex items-center gap-3 mb-4">
+                        <div class="bg-amber-500 p-2.5 rounded-xl"><i data-lucide="terminal" class="w-4 h-4 text-white"></i></div>
+                        <div>
+                            <h3 class="font-bold text-slate-800">Migration Script</h3>
+                            <p class="text-xs text-slate-400 mt-0.5">Run on machines with an old or broken agent — safe to run even if no agent is installed</p>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-3 bg-slate-900 rounded-2xl px-5 py-4 mb-4">
+                        <i data-lucide="chevron-right" class="w-4 h-4 text-slate-500 shrink-0"></i>
+                        <code id="migrateCmd" class="flex-1 text-sm text-amber-400 font-mono break-all">Loading...</code>
+                        <button id="copyMigrateBtn" onclick="copyAgentCmd('migrateCmd','copyMigrateBtn')" class="shrink-0 p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700 transition-all" title="Copy">
+                            <i data-lucide="copy" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+                    <div class="flex items-start gap-3 bg-amber-50 border border-amber-100 rounded-2xl px-4 py-3">
+                        <i data-lucide="info" class="w-4 h-4 text-amber-600 shrink-0 mt-0.5"></i>
+                        <p class="text-xs text-amber-700 leading-relaxed">Use this when an employee already has an old agent running. It kills the old process, removes all files, then installs the latest version cleanly. Cloud data is never touched.</p>
                     </div>
                 </div>
             </div>
@@ -1078,28 +1220,111 @@
     </div>
 </div>
 
-<!-- Export Modal -->
-<div id="exportModal" class="hidden fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-    <div class="bg-white rounded-3xl shadow-2xl w-full max-w-md p-8">
-        <div class="flex items-center gap-3 mb-6">
-            <div class="bg-indigo-50 p-2.5 rounded-xl text-indigo-600"><i data-lucide="download" class="w-5 h-5"></i></div>
-            <div>
-                <h3 class="text-lg font-bold text-slate-800">Export Data</h3>
-                <p class="text-xs text-slate-400 mt-0.5">Download as Excel (.xlsx)</p>
+<!-- Calendar Date Picker Popup -->
+<div id="calPickerBg" class="hidden fixed inset-0 z-[300]" onclick="closeDatePicker()"></div>
+<div id="calPicker" class="hidden fixed z-[301] bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden select-none" style="width:490px">
+    <div class="flex">
+        <!-- Quick selects panel -->
+        <div class="w-44 border-r border-slate-100 p-4 shrink-0">
+            <p class="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Select date range</p>
+            <div class="space-y-0.5">
+                <button id="calQ-today"     onclick="calQuickSelect('today')"     class="cal-q w-full text-left px-3 py-2 rounded-xl text-sm font-medium transition-colors text-slate-600 hover:bg-slate-100">Today</button>
+                <button id="calQ-yesterday" onclick="calQuickSelect('yesterday')" class="cal-q w-full text-left px-3 py-2 rounded-xl text-sm font-medium transition-colors text-slate-600 hover:bg-slate-100">Yesterday</button>
+                <button id="calQ-7d"        onclick="calQuickSelect('7d')"        class="cal-q w-full text-left px-3 py-2 rounded-xl text-sm font-medium transition-colors text-slate-600 hover:bg-slate-100">Last 7 days</button>
+                <button id="calQ-30d"       onclick="calQuickSelect('30d')"       class="cal-q w-full text-left px-3 py-2 rounded-xl text-sm font-medium transition-colors text-slate-600 hover:bg-slate-100">Last 30 days</button>
+                <button id="calQ-month"     onclick="calQuickSelect('month')"     class="cal-q w-full text-left px-3 py-2 rounded-xl text-sm font-medium transition-colors text-slate-600 hover:bg-slate-100">This month</button>
             </div>
         </div>
-        <div class="space-y-4">
+        <!-- Calendar panel -->
+        <div class="flex-1 p-4 min-w-0">
+            <div class="flex items-center justify-between mb-4">
+                <button onclick="calNavMonth(-1)" class="p-1.5 rounded-lg hover:bg-slate-100 text-slate-600 transition-colors">
+                    <i data-lucide="chevron-left" class="w-4 h-4"></i>
+                </button>
+                <span id="calMonthLabel" class="text-sm font-bold text-slate-800"></span>
+                <button onclick="calNavMonth(1)" class="p-1.5 rounded-lg hover:bg-slate-100 text-slate-600 transition-colors">
+                    <i data-lucide="chevron-right" class="w-4 h-4"></i>
+                </button>
+            </div>
+            <div class="grid grid-cols-7 mb-2">
+                <div class="text-center text-[11px] font-semibold text-slate-400 py-1">Sun</div>
+                <div class="text-center text-[11px] font-semibold text-slate-400 py-1">Mon</div>
+                <div class="text-center text-[11px] font-semibold text-slate-400 py-1">Tue</div>
+                <div class="text-center text-[11px] font-semibold text-slate-400 py-1">Wed</div>
+                <div class="text-center text-[11px] font-semibold text-slate-400 py-1">Thu</div>
+                <div class="text-center text-[11px] font-semibold text-slate-400 py-1">Fri</div>
+                <div class="text-center text-[11px] font-semibold text-slate-400 py-1">Sat</div>
+            </div>
+            <div id="calDaysGrid" class="grid grid-cols-7"></div>
+        </div>
+    </div>
+    <!-- Bottom bar -->
+    <div class="flex items-center justify-between px-5 py-3 border-t border-slate-100 bg-slate-50/70">
+        <span id="calRangeDisplay" class="text-sm font-medium text-slate-700 bg-white border border-slate-200 rounded-lg px-3 py-1.5 min-w-[160px] text-center font-mono tracking-wide"></span>
+        <div class="flex gap-2">
+            <button onclick="closeDatePicker()" class="px-4 py-1.5 text-sm font-semibold text-slate-600 hover:bg-slate-200 rounded-lg transition-colors">Cancel</button>
+            <button onclick="confirmDatePicker()" class="px-4 py-1.5 text-sm font-semibold bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors">Done</button>
+        </div>
+    </div>
+</div>
+
+<!-- Export Modal -->
+<div id="exportModal" class="hidden fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+    <div class="bg-white rounded-3xl shadow-2xl w-full max-w-lg p-8 max-h-[92vh] overflow-y-auto">
+        <div class="flex items-center gap-3 mb-6">
+            <div class="bg-indigo-50 p-2.5 rounded-xl text-indigo-600"><i data-lucide="download" class="w-5 h-5"></i></div>
+            <div class="flex-1">
+                <h3 class="text-lg font-bold text-slate-800">Export Report</h3>
+                <p class="text-xs text-slate-400 mt-0.5" id="exportSubtitle">Generate an Excel workbook with detailed data</p>
+            </div>
+            <button onclick="closeExportModal()" class="text-slate-400 hover:text-slate-600 transition-colors"><i data-lucide="x" class="w-5 h-5"></i></button>
+        </div>
+        <div class="space-y-5">
+            <!-- Format -->
             <div>
-                <label class="text-xs font-semibold text-slate-600 uppercase tracking-wide">Date</label>
+                <label class="text-xs font-semibold text-slate-600 uppercase tracking-wide">Format</label>
+                <div class="flex mt-2 rounded-xl border border-slate-200 overflow-hidden text-sm font-medium">
+                    <button id="exportFmtBtn-xlsx" onclick="setExportFmt('xlsx')"
+                            class="flex-1 py-2.5 transition-colors bg-indigo-600 text-white">
+                        <i data-lucide="table-2" class="w-3.5 h-3.5 inline-block mr-1.5 -mt-0.5"></i>Excel (.xlsx)
+                    </button>
+                    <button id="exportFmtBtn-pdf" onclick="setExportFmt('pdf')"
+                            class="flex-1 py-2.5 transition-colors text-slate-600 hover:bg-slate-50">
+                        <i data-lucide="file-text" class="w-3.5 h-3.5 inline-block mr-1.5 -mt-0.5"></i>PDF (graphical)
+                    </button>
+                </div>
+            </div>
+            <!-- Period -->
+            <div>
+                <label class="text-xs font-semibold text-slate-600 uppercase tracking-wide">Period</label>
+                <div class="flex mt-2 rounded-xl border border-slate-200 overflow-hidden text-sm font-medium">
+                    <button id="exportPeriodBtn-1d" onclick="setExportPeriod('1d')"
+                            class="flex-1 py-2.5 transition-colors bg-indigo-600 text-white">1 Day</button>
+                    <button id="exportPeriodBtn-7d" onclick="setExportPeriod('7d')"
+                            class="flex-1 py-2.5 transition-colors text-slate-600 hover:bg-slate-50">7 Days</button>
+                    <button id="exportPeriodBtn-30d" onclick="setExportPeriod('30d')"
+                            class="flex-1 py-2.5 transition-colors text-slate-600 hover:bg-slate-50">1 Month</button>
+                </div>
+            </div>
+            <!-- Date -->
+            <div>
+                <label id="exportDateLabel" class="text-xs font-semibold text-slate-600 uppercase tracking-wide">Date</label>
                 <input type="date" id="exportDate" class="w-full mt-1.5 px-3 py-2.5 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500">
             </div>
+            <!-- Employee -->
             <div>
-                <label class="text-xs font-semibold text-slate-600 uppercase tracking-wide">Employees</label>
+                <label class="text-xs font-semibold text-slate-600 uppercase tracking-wide">Employee</label>
                 <select id="exportScope" class="w-full mt-1.5 px-3 py-2.5 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500 bg-white">
                     <option value="all">All Employees</option>
                 </select>
             </div>
-            <div>
+            <!-- PDF note -->
+            <div id="exportPdfNote" class="hidden text-xs text-amber-700 bg-amber-50 border border-amber-200 px-3 py-2.5 rounded-xl leading-relaxed">
+                <i data-lucide="info" class="w-3.5 h-3.5 inline-block mr-1 -mt-0.5"></i>
+                PDF reports are generated per employee. Select a specific employee above.
+            </div>
+            <!-- Sheets (Excel only) -->
+            <div id="exportSheetsSection">
                 <label class="text-xs font-semibold text-slate-600 uppercase tracking-wide">Include Sheets</label>
                 <div class="mt-2 space-y-2">
                     <label class="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
@@ -1114,7 +1339,7 @@
                     <label class="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
                         <input type="checkbox" id="exportSheetUnproductive" checked class="rounded"> Unproductive Apps Only
                     </label>
-                    <label class="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                    <label id="exportTimelineRow" class="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
                         <input type="checkbox" id="exportSheetTimeline" class="rounded"> Hourly Timeline
                     </label>
                 </div>
@@ -1329,11 +1554,13 @@ async function initApp() {
     document.getElementById('scriptDownloadBtn').href = `${base}/install-script`;
     document.getElementById('uiDownloadBtn').href     = `${base}/download-ui`;
     document.getElementById('installCmd').textContent =
-        `powershell -ExecutionPolicy Bypass -Command "irm '${base}/install-script' | iex"`;
+        `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "irm '${base}/install-script' | iex"`;
     document.getElementById('uiInstallCmd').textContent =
-        `powershell -ExecutionPolicy Bypass -Command "irm '${base}/download-ui' -OutFile telemetry_ui.exe; Start-Process .\\telemetry_ui.exe"`;
+        `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "irm '${base}/download-ui' -OutFile telemetry_ui.exe; Start-Process .\\telemetry_ui.exe"`;
     document.getElementById('uninstallCmd').textContent =
-        `powershell -ExecutionPolicy Bypass -Command "irm '${base}/uninstall-script' | iex"`;
+        `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "irm '${base}/uninstall-script' | iex"`;
+    document.getElementById('migrateCmd').textContent =
+        `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "irm '${base}/migrate-script' | iex"`;
 
     // Version badge
     try {
@@ -1347,9 +1574,11 @@ async function initApp() {
     }
 
     const today = getTodayDate();
-    document.getElementById('datePicker').value         = today;
-    document.getElementById('overviewDatePicker').value = today;
-    document.getElementById('groupDatePicker').value    = today;
+    document.getElementById('datePicker').value      = today;
+    document.getElementById('groupDatePicker').value = today;
+    _overviewDate = today;
+    _empDate      = today;
+    _groupDate    = today;
 
     await Promise.all([fetchSidebarUsers(), fetchGroups()]);
     showView('home');
@@ -1508,8 +1737,18 @@ async function selectGroup(groupId) {
 }
 
 // ── Overview (home) ───────────────────────────────────────────────────────────────
+let _overviewDate      = '';
+let _overviewMode      = 'single';
+let _overviewRangeChart = null;
+
 async function loadOverview(silent = false) {
-    const date    = document.getElementById('overviewDatePicker').value;
+    _overviewMode = 'single';
+    document.getElementById('overviewDayContent').classList.remove('hidden');
+    document.getElementById('overviewRangePanel').classList.add('hidden');
+    document.getElementById('statTotalLabel').textContent  = 'Total Employees';
+    document.getElementById('statActiveLabel').textContent = 'Active Now';
+    document.getElementById('statAvgLabel').textContent    = 'Avg Productivity';
+    const date = _overviewDate || getTodayDate();
     const loading = document.getElementById('overviewLoading');
     const tbody   = document.getElementById('overviewTableBody');
     const empty   = document.getElementById('overviewEmpty');
@@ -1527,14 +1766,10 @@ async function loadOverview(silent = false) {
 
         const rows = await Promise.all(users.map(async u => {
             try {
-                const [sumRes, tlRes] = await Promise.all([
-                    apiFetch(`${API_BASE}/user-summary?user=${u.user}&date=${date}`),
-                    apiFetch(`${API_BASE}/user-timeline?user=${u.user}&date=${date}`),
-                ]);
-                const summary  = sumRes.ok ? await sumRes.json() : null;
-                const timeline = tlRes.ok  ? await tlRes.json()  : [];
-                const { status } = computeStatus(timeline);
-                return { username: u.user, summary, status };
+                const r = await apiFetch(`${API_BASE}/user-data?user=${encodeURIComponent(u.user)}&date=${date}`);
+                const d = r.ok ? await r.json() : null;
+                const { status } = computeStatus(d?.timeline || []);
+                return { username: u.user, summary: d?.summary || null, status };
             } catch { return { username: u.user, summary: null, status: 'offline' }; }
         }));
 
@@ -1666,11 +1901,81 @@ async function loadOverview(silent = false) {
     loading.classList.add('hidden');
 }
 
+async function loadOverviewRange(days) {
+    _overviewMode = 'range';
+    document.getElementById('overviewDayContent').classList.add('hidden');
+    document.getElementById('overviewRangePanel').classList.remove('hidden');
+    document.getElementById('statTotalLabel').textContent  = 'Total Employees';
+    document.getElementById('statActiveLabel').textContent = 'Active Employees';
+    document.getElementById('statAvgLabel').textContent    = 'Avg Productivity';
+    document.getElementById('statTotal').textContent    = '—';
+    document.getElementById('statActive').textContent   = '—';
+    document.getElementById('statAvgScore').textContent = '—';
+    document.getElementById('overviewRangeLoading').classList.remove('hidden');
+
+    const today = new Date(), end = _fmtDate(today);
+    const startD = new Date(today); startD.setDate(today.getDate() - days + 1);
+    const start = _fmtDate(startD);
+
+    try {
+        const res  = await apiFetch(`${API_BASE}/team-range?start=${start}&end=${end}`);
+        const data = await res.json();
+        const s = data.summary || {};
+        document.getElementById('statTotal').textContent    = s.total_employees   || '—';
+        document.getElementById('statActive').textContent   = s.active_employees  || '—';
+        document.getElementById('statAvgScore').textContent = s.avg_productivity_score != null ? s.avg_productivity_score + '%' : '—';
+
+        const daily  = data.daily || [];
+        const labels = daily.map(d => {
+            const dt = new Date(d.date + 'T00:00:00');
+            return days <= 7 ? ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dt.getDay()] : d.date.slice(5);
+        });
+        const ctx = document.getElementById('overviewRangeLineChart').getContext('2d');
+        if (_overviewRangeChart) { _overviewRangeChart.destroy(); _overviewRangeChart = null; }
+        _overviewRangeChart = new Chart(ctx, {
+            type: 'line',
+            data: { labels, datasets: [
+                { label: 'Productive Hours', data: daily.map(d => d.productive_hours),
+                  borderColor: 'rgba(99,102,241,1)', backgroundColor: 'rgba(99,102,241,0.08)',
+                  fill: true, tension: 0.3, pointRadius: 4, pointBackgroundColor: 'rgba(99,102,241,1)' },
+                { label: 'Active Hours', data: daily.map(d => d.active_hours),
+                  borderColor: 'rgba(16,185,129,1)', backgroundColor: 'rgba(16,185,129,0.05)',
+                  fill: false, tension: 0.3, pointRadius: 4, pointBackgroundColor: 'rgba(16,185,129,1)' },
+            ]},
+            options: { responsive: true,
+                plugins: { legend: { position: 'top', labels: { usePointStyle: true } } },
+                scales: { y: { beginAtZero: true, title: { display: true, text: 'Hours' } } }
+            }
+        });
+
+        const apps = data.top_apps || [];
+        const appsBody  = document.getElementById('overviewRangeAppsBody');
+        const appsEmpty = document.getElementById('overviewRangeAppsEmpty');
+        if (!apps.length) {
+            appsBody.innerHTML = '';
+            appsEmpty.classList.remove('hidden');
+        } else {
+            appsEmpty.classList.add('hidden');
+            appsBody.innerHTML = apps.slice(0, 15).map(a => `
+                <div class="flex items-center justify-between px-6 py-3 hover:bg-slate-50">
+                    <div class="flex items-center gap-3">
+                        <span class="w-2.5 h-2.5 rounded-full inline-block shrink-0 ${a.category==='Productive'?'bg-emerald-400':a.category==='Unproductive'?'bg-rose-400':'bg-slate-300'}"></span>
+                        <span class="text-sm text-slate-800 font-medium">${a.app}</span>
+                        <span class="text-xs text-slate-400">${a.category}</span>
+                    </div>
+                    <span class="text-sm font-semibold text-slate-700">${a.hours}h</span>
+                </div>`).join('');
+        }
+    } catch (e) { console.error('loadOverviewRange failed:', e); }
+    document.getElementById('overviewRangeLoading').classList.add('hidden');
+}
+
 // ── Employees view ────────────────────────────────────────────────────────────────
 let _empListData = [];
+let _empDate     = '';
 
 async function loadEmployees(silent = false) {
-    const today = getTodayDate();
+    const today = _empDate || getTodayDate();
     const grid  = document.getElementById('empGrid');
     if (!silent) {
         grid.innerHTML = `<div class="text-center py-12 text-slate-400">
@@ -1686,14 +1991,10 @@ async function loadEmployees(silent = false) {
 
         const rows = await Promise.all(users.map(async u => {
             try {
-                const [sumRes, tlRes] = await Promise.all([
-                    apiFetch(`${API_BASE}/user-summary?user=${u.user}&date=${today}`),
-                    apiFetch(`${API_BASE}/user-timeline?user=${u.user}&date=${today}`),
-                ]);
-                const summary  = sumRes.ok ? await sumRes.json() : null;
-                const timeline = tlRes.ok  ? await tlRes.json()  : [];
-                const { status } = computeStatus(timeline);
-                return { user: u.user, alias: u.alias, summary, status };
+                const r = await apiFetch(`${API_BASE}/user-data?user=${encodeURIComponent(u.user)}&date=${today}`);
+                const d = r.ok ? await r.json() : null;
+                const { status } = computeStatus(d?.timeline || []);
+                return { user: u.user, alias: u.alias, summary: d?.summary || null, status };
             } catch { return { user: u.user, alias: u.alias, summary: null, status: 'offline' }; }
         }));
 
@@ -1846,9 +2147,13 @@ function renderEmpGrid(rows) {
 
 // ── User detail ───────────────────────────────────────────────────────────────────
 let categoryChart = null, appChart = null, peakChart = null;
+let _userRangeMode = 'today';
+let _userRangeChart = null;
 
 async function selectUser(userId) {
     _currentUserId = userId;
+    // Reset to today view when switching employees
+    if (_userRangeMode !== 'today') setUserRangeMode('today');
     showView('userDetail');
     document.querySelectorAll('.sidebar-user').forEach(el => {
         el.classList.toggle('active', el.dataset.username === userId);
@@ -1857,20 +2162,183 @@ async function selectUser(userId) {
     await loadUserData();
 }
 
+function setUserRangeMode(mode) {
+    _userRangeMode = mode;
+    const dayContent = document.getElementById('userDayContent');
+    const rangePanel = document.getElementById('userRangePanel');
+
+    if (mode === 'today') {
+        dayContent.classList.remove('hidden');
+        rangePanel.classList.add('hidden');
+        loadUserData();
+    } else {
+        dayContent.classList.add('hidden');
+        rangePanel.classList.remove('hidden');
+        loadUserRangeData(mode === '7d' ? 7 : 30);
+    }
+}
+
+async function loadUserRangeData(days) {
+    if (!_currentUserId) return;
+    const appsBody  = document.getElementById('rangeAppsTableBody');
+    const appsEmpty = document.getElementById('rangeAppsTableEmpty');
+    appsBody.innerHTML = '';
+    appsEmpty.classList.add('hidden');
+    document.getElementById('rangeProdHours').textContent  = '…';
+    document.getElementById('rangeAvgScore').textContent   = '…';
+    document.getElementById('rangeActiveHours').textContent = '…';
+
+    const end   = new Date();
+    const start = new Date();
+    start.setDate(end.getDate() - days + 1);
+    const fmt = d => d.toISOString().slice(0, 10);
+
+    try {
+        const res = await apiFetch(
+            `${API_BASE}/user-range?user=${encodeURIComponent(_currentUserId)}&start=${fmt(start)}&end=${fmt(end)}`
+        );
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+
+        // Update summary cards
+        const s = data.summary;
+        document.getElementById('rangeProdHours').textContent   = s.total_productive_hours.toFixed(1) + 'h';
+        document.getElementById('rangeAvgScore').textContent    = s.avg_productivity_score ? `${s.avg_productivity_score}%` : '—';
+        document.getElementById('rangeActiveHours').textContent = s.total_active_hours.toFixed(1) + 'h';
+        document.getElementById('rangeChartTitle').textContent  =
+            `Activity Over ${days === 7 ? '7 Days' : '30 Days'}`;
+
+        // Build chart labels: for 7d use day names (Mon), for 30d use MM-DD dates
+        const labels      = data.daily.map(d => days === 7 ? d.day_name : d.date.slice(5));
+        const prodHours   = data.daily.map(d => d.productive_hours);
+        const activeHours = data.daily.map(d => d.active_hours);
+        const scores      = data.daily.map(d => d.productivity_score);
+
+        if (_userRangeChart) { _userRangeChart.destroy(); _userRangeChart = null; }
+        const ctx = document.getElementById('rangeLineChart').getContext('2d');
+        _userRangeChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels,
+                datasets: [
+                    {
+                        label: 'Productive Hours',
+                        data: prodHours,
+                        borderColor: 'rgba(99,102,241,1)',
+                        backgroundColor: 'rgba(99,102,241,0.08)',
+                        fill: true,
+                        tension: 0.4,
+                        pointRadius: 4,
+                        pointHoverRadius: 6,
+                        borderWidth: 2,
+                        yAxisID: 'yHours',
+                    },
+                    {
+                        label: 'Active Hours',
+                        data: activeHours,
+                        borderColor: 'rgba(16,185,129,1)',
+                        backgroundColor: 'rgba(16,185,129,0.06)',
+                        fill: true,
+                        tension: 0.4,
+                        pointRadius: 4,
+                        pointHoverRadius: 6,
+                        borderWidth: 2,
+                        yAxisID: 'yHours',
+                    },
+                    {
+                        label: 'Productivity %',
+                        data: scores,
+                        borderColor: 'rgba(245,158,11,0.9)',
+                        backgroundColor: 'transparent',
+                        fill: false,
+                        tension: 0.4,
+                        pointRadius: 3,
+                        pointHoverRadius: 5,
+                        borderWidth: 1.5,
+                        borderDash: [4, 3],
+                        yAxisID: 'yScore',
+                    },
+                ],
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { position: 'top', labels: { font: { size: 11 }, boxWidth: 12 } },
+                    tooltip: {
+                        callbacks: {
+                            label: ctx => {
+                                if (ctx.dataset.yAxisID === 'yScore')
+                                    return ` Productivity: ${ctx.raw}%`;
+                                return ` ${ctx.dataset.label}: ${ctx.raw.toFixed(1)}h`;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        grid: { display: false },
+                        ticks: { font: { size: days === 30 ? 9 : 11 }, maxRotation: days === 30 ? 45 : 0 },
+                    },
+                    yHours: {
+                        type: 'linear',
+                        position: 'left',
+                        beginAtZero: true,
+                        title: { display: true, text: 'Hours', font: { size: 10 } },
+                        ticks: { font: { size: 10 } },
+                        grid: { color: '#f1f5f9' },
+                    },
+                    yScore: {
+                        type: 'linear',
+                        position: 'right',
+                        min: 0,
+                        max: 100,
+                        title: { display: true, text: 'Score %', font: { size: 10 } },
+                        ticks: { font: { size: 10 }, callback: v => v + '%' },
+                        grid: { display: false },
+                    },
+                },
+            },
+        });
+
+        // Render top apps table
+        if (!data.top_apps.length) {
+            appsEmpty.classList.remove('hidden');
+        } else {
+            const frag = document.createDocumentFragment();
+            data.top_apps.forEach(a => {
+                const tr = document.createElement('tr');
+                tr.className = 'hover:bg-slate-50';
+                const badge = a.category === 'Productive'
+                    ? '<span class="px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700">Productive</span>'
+                    : '<span class="px-2 py-0.5 rounded-full text-xs font-medium bg-rose-100 text-rose-600">Unproductive</span>';
+                tr.innerHTML = `
+                    <td class="px-6 py-3 font-medium text-slate-700">${a.app}</td>
+                    <td class="px-6 py-3 text-center">${badge}</td>
+                    <td class="px-6 py-3 text-right font-semibold text-slate-800 tabular-nums">${a.hours.toFixed(1)}h</td>`;
+                frag.appendChild(tr);
+            });
+            appsBody.appendChild(frag);
+        }
+    } catch(e) {
+        if (e.message !== 'Session expired') console.error('user range:', e);
+        document.getElementById('rangeProdHours').textContent   = '—';
+        document.getElementById('rangeAvgScore').textContent    = '—';
+        document.getElementById('rangeActiveHours').textContent = '—';
+    }
+}
+
 async function loadUserData() {
     if (!_currentUserId) return;
     const date = document.getElementById('datePicker').value;
     try {
-        const [sumRes, appsRes, tlRes] = await Promise.all([
-            apiFetch(`${API_BASE}/user-summary?user=${_currentUserId}&date=${date}`),
-            apiFetch(`${API_BASE}/user-apps?user=${_currentUserId}&date=${date}`),
-            apiFetch(`${API_BASE}/user-timeline?user=${_currentUserId}&date=${date}`),
-        ]);
+        const res  = await apiFetch(`${API_BASE}/user-data?user=${encodeURIComponent(_currentUserId)}&date=${date}`);
+        const data = res.ok ? await res.json() : null;
+        const summary  = data?.summary  || null;
+        const apps     = data?.apps     || [];
+        const timeline = data?.timeline || [];
 
-        // Status card
-        const timeline = tlRes.ok ? await tlRes.json() : [];
-        const { status, since } = computeStatus(timeline);
-        document.getElementById('kpiStatusBadge').innerHTML = statusBadge(status, true);
         const formatSince = (ts, label) => {
             const minsAgo = Math.round((Date.now() - ts.getTime()) / 60000);
             return minsAgo < 1    ? `${label} just now` :
@@ -1878,17 +2346,19 @@ async function loadUserData() {
                    minsAgo < 1440 ? `${label} ${Math.round(minsAgo/60)}h ago` :
                                     `${label} ${Math.round(minsAgo/1440)}d ago`;
         };
+
+        // Status card
+        const { status, since } = computeStatus(timeline);
+        document.getElementById('kpiStatusBadge').innerHTML = statusBadge(status, true);
         if (status === 'available') {
             document.getElementById('kpiStatusSince').textContent = '';
         } else if (since) {
-            const label = status === 'away' ? 'Idle since' : 'Last seen';
-            document.getElementById('kpiStatusSince').textContent = formatSince(since, label);
+            document.getElementById('kpiStatusSince').textContent =
+                formatSince(since, status === 'away' ? 'Idle since' : 'Last seen');
         } else {
-            // No events for selected date — fall back to last_seen stored in UserIndex
             const rawLastSeen = _employeeLastSeen[_currentUserId];
             if (rawLastSeen) {
-                const normTs  = rawLastSeen.replace(/[+-]\d{2}:\d{2}$/, 'Z');
-                const lsTime  = new Date(normTs);
+                const lsTime = new Date(rawLastSeen.replace(/[+-]\d{2}:\d{2}$/, 'Z'));
                 document.getElementById('kpiStatusSince').textContent =
                     isNaN(lsTime) ? 'Last seen unknown' : formatSince(lsTime, 'Last seen');
             } else {
@@ -1897,23 +2367,19 @@ async function loadUserData() {
         }
 
         // Summary KPIs
-        if (sumRes.ok) {
-            const s = await sumRes.json();
-            document.getElementById('kpiScore').textContent  = `${s.productivity_score}%`;
-            document.getElementById('scoreBar').style.width  = `${s.productivity_score}%`;
-            document.getElementById('kpiActive').textContent = formatDuration(s.total_active_time);
-            document.getElementById('kpiIdle').textContent   = formatDuration(s.total_idle_time);
-            document.getElementById('kpiLocked').textContent = formatDuration(s.total_screen_off_time || 0);
+        if (summary) {
+            document.getElementById('kpiScore').textContent  = `${summary.productivity_score}%`;
+            document.getElementById('scoreBar').style.width  = `${summary.productivity_score}%`;
+            document.getElementById('kpiActive').textContent = formatDuration(summary.total_active_time);
+            document.getElementById('kpiIdle').textContent   = formatDuration(summary.total_idle_time);
+            document.getElementById('kpiLocked').textContent = formatDuration(summary.total_screen_off_time || 0);
         } else {
             ['kpiScore','kpiActive','kpiIdle','kpiLocked'].forEach(id => document.getElementById(id).textContent = '—');
             document.getElementById('scoreBar').style.width = '0%';
         }
 
-        if (appsRes.ok) {
-            const apps = await appsRes.json();
-            updateCharts(apps, timeline);
-            updateTable(apps);
-        }
+        updateCharts(apps, timeline);
+        updateTable(apps);
     } catch (e) { if (e.message !== 'Session expired') console.error(e); }
 }
 
@@ -2177,9 +2643,11 @@ function updateTable(apps) {
 }
 
 // ── Group detail ──────────────────────────────────────────────────────────────────
+let _groupDate = '';
+
 async function loadGroupData() {
     if (!_currentGroupId) return;
-    const date    = document.getElementById('groupDatePicker').value;
+    const date = _groupDate || getTodayDate();
     const loading = document.getElementById('groupLoading');
     const tbody   = document.getElementById('groupTableBody');
     const empty   = document.getElementById('groupEmpty');
@@ -2648,184 +3116,794 @@ async function submitRename(e) {
     }
 }
 
+// ── Calendar Date Picker ──────────────────────────────────────────────────────────
+let _calTarget    = null;
+let _calMode      = 'single';
+let _calViewYear  = new Date().getFullYear();
+let _calViewMonth = new Date().getMonth();
+let _calSelected  = null;   // { start: 'YYYY-MM-DD', end: 'YYYY-MM-DD'|null }
+let _calQuick     = 'today';
+
+function _fmtDate(d) { return d.toISOString().slice(0, 10); }
+
+function _calDisplayDate(str) {
+    if (!str) return '—';
+    const d = new Date(str + 'T00:00:00');
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function _calBtnLabel(quick, date) {
+    const map = { today: 'Today', yesterday: 'Yesterday', '7d': 'Last 7 days', '30d': 'Last 30 days', month: 'This month' };
+    if (quick && map[quick]) return map[quick];
+    return date ? _calDisplayDate(date) : 'Select date';
+}
+
+function openDatePicker(target, triggerEl) {
+    _calTarget = target;
+    const today = new Date();
+
+    if (target === 'overview') {
+        const isRange = _overviewMode === 'range';
+        _calMode     = isRange ? 'range' : 'single';
+        _calQuick    = isRange ? (document.getElementById('overviewDateBtn').querySelector('.cal-btn-text').textContent.includes('7') ? '7d' : '30d') : 'today';
+        const d = new Date(_overviewDate + 'T00:00:00');
+        _calViewYear = d.getFullYear(); _calViewMonth = d.getMonth();
+        _calSelected = isRange ? { start: _overviewDate, end: _fmtDate(today) } : { start: _overviewDate, end: _overviewDate };
+    } else if (target === 'user') {
+        const isRange = _userRangeMode !== 'today';
+        _calMode     = isRange ? 'range' : 'single';
+        _calQuick    = _userRangeMode === 'today' ? 'today' : _userRangeMode;
+        const pickerVal = document.getElementById('datePicker').value || _fmtDate(today);
+        const d = new Date(pickerVal + 'T00:00:00');
+        _calViewYear = d.getFullYear(); _calViewMonth = d.getMonth();
+        if (isRange) {
+            const days = _userRangeMode === '7d' ? 7 : 30;
+            const st = new Date(today); st.setDate(today.getDate() - days + 1);
+            _calSelected = { start: _fmtDate(st), end: _fmtDate(today) };
+        } else {
+            _calSelected = { start: pickerVal, end: pickerVal };
+        }
+    } else if (target === 'group') {
+        _calMode = 'single';
+        _calQuick = 'today';
+        const d = new Date((_groupDate || _fmtDate(today)) + 'T00:00:00');
+        _calViewYear = d.getFullYear(); _calViewMonth = d.getMonth();
+        _calSelected = { start: _groupDate || _fmtDate(today), end: _groupDate || _fmtDate(today) };
+    } else if (target === 'emp') {
+        _calMode = 'single';
+        _calQuick = 'today';
+        const d = new Date((_empDate || _fmtDate(today)) + 'T00:00:00');
+        _calViewYear = d.getFullYear(); _calViewMonth = d.getMonth();
+        _calSelected = { start: _empDate || _fmtDate(today), end: _empDate || _fmtDate(today) };
+    }
+
+    const picker = document.getElementById('calPicker');
+    const rect   = triggerEl.getBoundingClientRect();
+    let top  = rect.bottom + 6;
+    let left = rect.right - 490;
+    if (left < 8) left = 8;
+    if (top + 380 > window.innerHeight) top = rect.top - 388;
+    picker.style.top  = top + 'px';
+    picker.style.left = left + 'px';
+
+    document.getElementById('calPickerBg').classList.remove('hidden');
+    picker.classList.remove('hidden');
+    renderCalendarGrid();
+    updateCalQuickBtns();
+    lucide.createIcons({ nodes: [...picker.querySelectorAll('[data-lucide]')] });
+}
+
+function closeDatePicker() {
+    document.getElementById('calPickerBg').classList.add('hidden');
+    document.getElementById('calPicker').classList.add('hidden');
+}
+
+function confirmDatePicker() {
+    if (!_calSelected || !_calSelected.start) { closeDatePicker(); return; }
+    const end = _calSelected.end || _calSelected.start;
+
+    if (_calTarget === 'overview') {
+        if (_calQuick === '7d' || _calQuick === '30d') {
+            const days = _calQuick === '7d' ? 7 : 30;
+            _overviewDate = _calSelected.start;
+            _calSetBtnLabel('overviewDateBtn', _calBtnLabel(_calQuick));
+            loadOverviewRange(days);
+        } else {
+            _overviewDate = _calSelected.start;
+            _overviewMode = 'single';
+            _calSetBtnLabel('overviewDateBtn', _calBtnLabel(_calQuick, _calSelected.start));
+            loadOverview();
+        }
+    } else if (_calTarget === 'user') {
+        if (_calQuick === '7d' || _calQuick === '30d') {
+            _calSetBtnLabel('userDateBtn', _calBtnLabel(_calQuick));
+            setUserRangeMode(_calQuick);
+        } else {
+            const date = _calSelected.start;
+            document.getElementById('datePicker').value = date;
+            _calSetBtnLabel('userDateBtn', _calBtnLabel(_calQuick, date));
+            if (_userRangeMode !== 'today') setUserRangeMode('today');
+            else loadUserData();
+        }
+    } else if (_calTarget === 'group') {
+        _groupDate = _calSelected.start;
+        document.getElementById('groupDatePicker').value = _groupDate;
+        _calSetBtnLabel('groupDateBtn', _calBtnLabel(_calQuick, _groupDate));
+        loadGroupData();
+    } else if (_calTarget === 'emp') {
+        _empDate = _calSelected.start;
+        _calSetBtnLabel('empDateBtn', _calBtnLabel(_calQuick, _empDate));
+        loadEmployees();
+    }
+    closeDatePicker();
+}
+
+function _calSetBtnLabel(btnId, label) {
+    const el = document.getElementById(btnId);
+    if (el) el.querySelector('.cal-btn-text').textContent = label;
+}
+
+function calQuickSelect(key) {
+    _calQuick = key;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (key === 'today') {
+        _calMode = 'single';
+        _calSelected = { start: _fmtDate(today), end: _fmtDate(today) };
+    } else if (key === 'yesterday') {
+        _calMode = 'single';
+        const y = new Date(today); y.setDate(today.getDate() - 1);
+        _calSelected = { start: _fmtDate(y), end: _fmtDate(y) };
+        _calViewYear = y.getFullYear(); _calViewMonth = y.getMonth();
+    } else if (key === '7d') {
+        _calMode = 'range';
+        const st = new Date(today); st.setDate(today.getDate() - 6);
+        _calSelected = { start: _fmtDate(st), end: _fmtDate(today) };
+    } else if (key === '30d') {
+        _calMode = 'range';
+        const st = new Date(today); st.setDate(today.getDate() - 29);
+        _calSelected = { start: _fmtDate(st), end: _fmtDate(today) };
+    } else if (key === 'month') {
+        _calMode = 'range';
+        const st = new Date(today.getFullYear(), today.getMonth(), 1);
+        _calSelected = { start: _fmtDate(st), end: _fmtDate(today) };
+    }
+    _calViewYear = today.getFullYear(); _calViewMonth = today.getMonth();
+    renderCalendarGrid();
+    updateCalQuickBtns();
+}
+
+function calNavMonth(dir) {
+    _calViewMonth += dir;
+    if (_calViewMonth < 0)  { _calViewMonth = 11; _calViewYear--; }
+    if (_calViewMonth > 11) { _calViewMonth = 0;  _calViewYear++; }
+    renderCalendarGrid();
+}
+
+function calClickDay(dateStr) {
+    _calQuick = null;
+    if (_calMode === 'range') {
+        const hasComplete = _calSelected && _calSelected.start && _calSelected.end;
+        if (!_calSelected?.start || hasComplete) {
+            _calSelected = { start: dateStr, end: null };
+        } else {
+            if (dateStr < _calSelected.start) {
+                _calSelected = { start: dateStr, end: _calSelected.start };
+            } else {
+                _calSelected = { start: _calSelected.start, end: dateStr };
+            }
+        }
+    } else {
+        _calSelected = { start: dateStr, end: dateStr };
+    }
+    renderCalendarGrid();
+    updateCalQuickBtns();
+}
+
+function renderCalendarGrid() {
+    const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+    document.getElementById('calMonthLabel').textContent = `${MONTHS[_calViewMonth]} ${_calViewYear}`;
+
+    const grid = document.getElementById('calDaysGrid');
+    grid.innerHTML = '';
+    const todayStr    = _fmtDate(new Date());
+    const firstDay    = new Date(_calViewYear, _calViewMonth, 1).getDay();
+    const daysInMonth = new Date(_calViewYear, _calViewMonth + 1, 0).getDate();
+    const selStart    = _calSelected?.start || null;
+    const selEnd      = _calSelected?.end   || selStart;
+
+    for (let i = 0; i < firstDay; i++) {
+        const ph = document.createElement('div');
+        ph.style.height = '36px';
+        grid.appendChild(ph);
+    }
+    for (let d = 1; d <= daysInMonth; d++) {
+        const ds  = `${_calViewYear}-${String(_calViewMonth+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+        const btn = document.createElement('button');
+        btn.textContent = d;
+        btn.onclick     = () => calClickDay(ds);
+
+        const isStart  = ds === selStart;
+        const isEnd    = ds === selEnd && selEnd !== selStart;
+        const isOnly   = ds === selStart && selStart === selEnd;
+        const inRange  = selStart && selEnd && ds > selStart && ds < selEnd;
+        const isToday  = ds === todayStr;
+        const isFuture = ds > todayStr;
+
+        let cls = 'h-9 w-full text-sm flex items-center justify-center transition-all ';
+        if (isFuture) cls += 'text-slate-300 cursor-default ';
+        else if (isOnly || isStart || isEnd) cls += 'bg-indigo-600 text-white rounded-full font-semibold ';
+        else if (inRange) cls += 'bg-indigo-50 text-indigo-700 rounded-none ';
+        else if (isToday) cls += 'text-indigo-600 font-bold hover:bg-indigo-50 rounded-full ';
+        else cls += 'text-slate-700 hover:bg-slate-100 rounded-full font-medium ';
+
+        btn.className = cls;
+        if (isFuture) btn.disabled = true;
+        grid.appendChild(btn);
+    }
+    _updateCalRangeDisplay();
+}
+
+function _updateCalRangeDisplay() {
+    const el  = document.getElementById('calRangeDisplay');
+    const fmt = str => {
+        if (!str) return '—';
+        const d = new Date(str + 'T00:00:00');
+        return `${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}-${d.getFullYear()}`;
+    };
+    if (!_calSelected?.start) { el.textContent = 'Select a date'; return; }
+    const end = _calSelected.end || _calSelected.start;
+    el.textContent = _calSelected.start === end
+        ? fmt(_calSelected.start)
+        : `${fmt(_calSelected.start)}  —  ${fmt(end)}`;
+}
+
+function updateCalQuickBtns() {
+    ['today','yesterday','7d','30d','month'].forEach(k => {
+        const btn = document.getElementById(`calQ-${k}`);
+        if (!btn) return;
+        if (k === _calQuick) {
+            btn.className = 'cal-q w-full text-left px-3 py-2 rounded-xl text-sm font-semibold transition-colors bg-indigo-100 text-indigo-700';
+        } else {
+            btn.className = 'cal-q w-full text-left px-3 py-2 rounded-xl text-sm font-medium transition-colors text-slate-600 hover:bg-slate-100';
+        }
+    });
+}
+
 // ── Export ────────────────────────────────────────────────────────────────────────
-let _exportScope = 'all'; // 'all' | group_id
+let _exportScope  = 'all';
+let _exportFmt    = 'xlsx';
+let _exportPeriod = '1d';
+
+function _exportToggle(prefix, active, opts) {
+    opts.forEach(o => {
+        const btn = document.getElementById(`${prefix}-${o}`);
+        if (!btn) return;
+        if (o === active) {
+            btn.classList.add('bg-indigo-600', 'text-white');
+            btn.classList.remove('text-slate-600', 'hover:bg-slate-50');
+        } else {
+            btn.classList.remove('bg-indigo-600', 'text-white');
+            btn.classList.add('text-slate-600', 'hover:bg-slate-50');
+        }
+    });
+}
+
+function setExportFmt(fmt) {
+    _exportFmt = fmt;
+    _exportToggle('exportFmtBtn', fmt, ['xlsx', 'pdf']);
+    const sheets  = document.getElementById('exportSheetsSection');
+    const pdfNote = document.getElementById('exportPdfNote');
+    const sub     = document.getElementById('exportSubtitle');
+    if (fmt === 'pdf') {
+        sheets.classList.add('hidden');
+        pdfNote.classList.remove('hidden');
+        sub.textContent = 'Generate a graphical PDF report (single employee)';
+    } else {
+        sheets.classList.remove('hidden');
+        pdfNote.classList.add('hidden');
+        sub.textContent = 'Generate an Excel workbook with detailed data';
+    }
+}
+
+function setExportPeriod(period) {
+    _exportPeriod = period;
+    _exportToggle('exportPeriodBtn', period, ['1d', '7d', '30d']);
+    const lbl     = document.getElementById('exportDateLabel');
+    const tlRow   = document.getElementById('exportTimelineRow');
+    if (period === '1d') {
+        lbl.textContent = 'Date';
+        tlRow.classList.remove('hidden');
+    } else {
+        lbl.textContent = period === '7d' ? 'End Date (last 7 days)' : 'End Date (last 30 days)';
+        tlRow.classList.add('hidden');
+    }
+}
 
 function openExportModal(scope, employeeUser) {
-    _exportScope = scope;
+    _exportScope  = scope;
+    _exportFmt    = 'xlsx';
+    _exportPeriod = '1d';
+    setExportFmt('xlsx');
+    setExportPeriod('1d');
     document.getElementById('exportDate').value = getTodayDate();
     document.getElementById('exportError').classList.add('hidden');
     document.getElementById('exportProgress').classList.add('hidden');
 
-    // Populate scope select
     const sel = document.getElementById('exportScope');
-    sel.innerHTML = '<option value="all">All Employees</option>';
+    sel.innerHTML = '';
+
     if (scope === 'employee' && employeeUser) {
-        sel.innerHTML = '';
         const alias = aliasFor(employeeUser);
-        const opt = document.createElement('option');
-        opt.value = employeeUser;
+        const opt   = document.createElement('option');
+        opt.value       = employeeUser;
         opt.textContent = alias !== employeeUser ? `${alias} (${employeeUser})` : employeeUser;
-        opt.selected = true;
+        opt.selected    = true;
         sel.appendChild(opt);
-    }
-    if (scope === 'group' && _currentGroupId) {
-        const g = _allGroups.find(x => x.id === _currentGroupId);
-        const opt = document.createElement('option');
-        opt.value = _currentGroupId;
-        opt.textContent = g ? g.name : _currentGroupId;
-        opt.selected = true;
-        sel.appendChild(opt);
-    }
-    if (scope !== 'employee') {
+    } else {
+        const allOpt = document.createElement('option');
+        allOpt.value = 'all'; allOpt.textContent = 'All Employees';
+        sel.appendChild(allOpt);
+
+        if (scope === 'group' && _currentGroupId) {
+            const g   = _allGroups.find(x => x.id === _currentGroupId);
+            const opt = document.createElement('option');
+            opt.value = _currentGroupId;
+            opt.textContent = g ? g.name : _currentGroupId;
+            opt.selected = true;
+            sel.appendChild(opt);
+        }
         _allGroups.forEach(g => {
-            if (g.id !== _currentGroupId) {
-                const opt = document.createElement('option');
-                opt.value = g.id;
-                opt.textContent = g.name;
-                sel.appendChild(opt);
-            }
+            if (g.id === _currentGroupId && scope === 'group') return;
+            const opt = document.createElement('option');
+            opt.value = g.id; opt.textContent = g.name;
+            sel.appendChild(opt);
+        });
+        const sep = document.createElement('option');
+        sep.disabled = true; sep.textContent = '── Employees ──';
+        sel.appendChild(sep);
+        _allEmployees.forEach(u => {
+            const opt = document.createElement('option');
+            opt.value = u;
+            const a   = aliasFor(u);
+            opt.textContent = a !== u ? `${a} (${u})` : u;
+            sel.appendChild(opt);
         });
     }
 
     document.getElementById('exportModal').classList.remove('hidden');
+    lucide.createIcons();
 }
 
 function closeExportModal() {
     document.getElementById('exportModal').classList.add('hidden');
 }
 
+function _showExportError(msg) {
+    const el = document.getElementById('exportError');
+    el.textContent = msg;
+    el.classList.remove('hidden');
+}
+
 async function submitExport() {
-    const date   = document.getElementById('exportDate').value;
-    const scope  = document.getElementById('exportScope').value;
-    const sheets = {
-        summary:       document.getElementById('exportSheetSummary').checked,
-        apps:          document.getElementById('exportSheetApps').checked,
-        productive:    document.getElementById('exportSheetProductive').checked,
-        unproductive:  document.getElementById('exportSheetUnproductive').checked,
-        timeline:      document.getElementById('exportSheetTimeline').checked,
-    };
-    if (!date) { document.getElementById('exportError').textContent = 'Select a date.'; document.getElementById('exportError').classList.remove('hidden'); return; }
+    const fmt     = _exportFmt;
+    const period  = _exportPeriod;
+    const endDate = document.getElementById('exportDate').value;
+    const scope   = document.getElementById('exportScope').value;
+    document.getElementById('exportError').classList.add('hidden');
+
+    if (!endDate) { _showExportError('Select a date.'); return; }
+
+    const isGroup = !!_allGroups.find(g => g.id === scope);
+    const isAll   = scope === 'all';
+    if (fmt === 'pdf' && (isAll || isGroup)) {
+        _showExportError('PDF reports require a specific employee. Select one from the Employee dropdown.');
+        return;
+    }
 
     const btn = document.getElementById('exportSubmitBtn');
     btn.disabled = true;
-    document.getElementById('exportError').classList.add('hidden');
     document.getElementById('exportProgress').classList.remove('hidden');
 
     try {
-        // Determine which employees to export
+        const days = period === '7d' ? 7 : period === '30d' ? 30 : 1;
+        let startDate = endDate;
+        if (period !== '1d') {
+            const endD   = new Date(endDate + 'T00:00:00');
+            const startD = new Date(endD);
+            startD.setDate(endD.getDate() - days + 1);
+            startDate = startD.toISOString().slice(0, 10);
+        }
+
         let employees = [];
-        if (scope === 'all') {
-            const r = await apiFetch(`${API_BASE}/users`);
+        if (isAll) {
+            const r  = await apiFetch(`${API_BASE}/users`);
             employees = await r.json();
-        } else if (_allGroups.find(g => g.id === scope)) {
-            // It's a group ID
-            const r = await apiFetch(`${API_BASE}/groups/${scope}/summary?date=${date}`);
-            const d = await r.json();
+        } else if (isGroup) {
+            const r  = await apiFetch(`${API_BASE}/groups/${scope}/summary?date=${endDate}`);
+            const d  = await r.json();
             employees = (d.members || []).map(m => ({ user: m.username, alias: aliasFor(m.username) }));
         } else {
-            // Single employee by username
             employees = [{ user: scope, alias: aliasFor(scope) }];
         }
 
-        document.getElementById('exportProgressText').textContent = `Fetching data for ${employees.length} employees...`;
+        document.getElementById('exportProgressText').textContent =
+            `Fetching data for ${employees.length} employee${employees.length !== 1 ? 's' : ''}…`;
 
-        // Fetch all data
-        const allData = await Promise.all(employees.map(async (u) => {
+        const allData = await Promise.all(employees.map(async emp => {
+            const u = emp.user, a = emp.alias || emp.user;
             try {
-                const [sumRes, appsRes, tlRes] = await Promise.all([
-                    apiFetch(`${API_BASE}/user-summary?user=${u.user}&date=${date}`),
-                    apiFetch(`${API_BASE}/user-apps?user=${u.user}&date=${date}`),
-                    apiFetch(`${API_BASE}/user-timeline?user=${u.user}&date=${date}`),
-                ]);
-                return {
-                    user:     u.user,
-                    alias:    u.alias || u.user,
-                    summary:  sumRes.ok  ? await sumRes.json()  : null,
-                    apps:     appsRes.ok ? await appsRes.json() : [],
-                    timeline: tlRes.ok   ? await tlRes.json()   : [],
-                };
-            } catch { return { user: u.user, alias: u.alias || u.user, summary: null, apps: [], timeline: [] }; }
+                if (period === '1d') {
+                    const r = await apiFetch(`${API_BASE}/user-data?user=${encodeURIComponent(u)}&date=${endDate}`);
+                    if (!r.ok) return { user: u, alias: a, summary: null, apps: [], timeline: [] };
+                    const d = await r.json();
+                    return { user: u, alias: a, summary: d.summary, apps: d.apps || [], timeline: d.timeline || [] };
+                } else {
+                    const r = await apiFetch(`${API_BASE}/user-range?user=${encodeURIComponent(u)}&start=${startDate}&end=${endDate}`);
+                    if (!r.ok) return { user: u, alias: a, rangeSummary: null, rangeDaily: [], rangeApps: [] };
+                    const d = await r.json();
+                    return { user: u, alias: a, rangeSummary: d.summary, rangeDaily: d.daily || [], rangeApps: d.top_apps || [] };
+                }
+            } catch {
+                return { user: u, alias: a, summary: null, apps: [], timeline: [], rangeSummary: null, rangeDaily: [], rangeApps: [] };
+            }
         }));
 
-        document.getElementById('exportProgressText').textContent = 'Building workbook...';
+        document.getElementById('exportProgressText').textContent = fmt === 'pdf' ? 'Generating PDF…' : 'Building workbook…';
 
-        const wb = XLSX.utils.book_new();
-        const fmtSecs = s => s ? `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m` : '—';
+        if (fmt === 'pdf') {
+            await generatePDF(allData[0], period, endDate, startDate);
+        } else {
+            const sheets = {
+                summary:      document.getElementById('exportSheetSummary').checked,
+                apps:         document.getElementById('exportSheetApps').checked,
+                productive:   document.getElementById('exportSheetProductive').checked,
+                unproductive: document.getElementById('exportSheetUnproductive').checked,
+                timeline:     period === '1d' && document.getElementById('exportSheetTimeline').checked,
+            };
+            generateXLSX(allData, period, endDate, startDate, scope, sheets);
+        }
+        closeExportModal();
+    } catch (e) {
+        _showExportError(e.message || 'Export failed');
+    } finally {
+        btn.disabled = false;
+        document.getElementById('exportProgress').classList.add('hidden');
+    }
+}
 
+function generateXLSX(allData, period, endDate, startDate, scope, sheets) {
+    const wb      = XLSX.utils.book_new();
+    const fmtSecs = s => s ? `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m` : '—';
+    const periodStr = period === '1d' ? endDate : `${startDate} to ${endDate}`;
+
+    if (period === '1d') {
         if (sheets.summary) {
             const rows = [['Employee', 'Username', 'Date', 'Productivity Score', 'Active Time', 'Idle Time', 'Screen Off Time', 'Top App']];
-            allData.forEach(d => {
-                rows.push([
-                    d.alias, d.user, date,
-                    d.summary ? d.summary.productivity_score + '%' : '—',
-                    d.summary ? fmtSecs(d.summary.total_active_time) : '—',
-                    d.summary ? fmtSecs(d.summary.total_idle_time) : '—',
-                    d.summary ? fmtSecs(d.summary.total_screen_off_time) : '—',
-                    d.summary ? d.summary.top_app : '—',
-                ]);
-            });
+            allData.forEach(d => rows.push([
+                d.alias, d.user, endDate,
+                d.summary ? d.summary.productivity_score + '%' : '—',
+                d.summary ? fmtSecs(d.summary.total_active_time)     : '—',
+                d.summary ? fmtSecs(d.summary.total_idle_time)       : '—',
+                d.summary ? fmtSecs(d.summary.total_screen_off_time) : '—',
+                d.summary ? d.summary.top_app : '—',
+            ]));
             XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Summary');
         }
-
         if (sheets.apps) {
-            const rows = [['Employee', 'Username', 'Date', 'Application', 'Category', 'Time Spent', 'Time (seconds)']];
-            allData.forEach(d => {
-                d.apps.forEach(a => {
-                    rows.push([d.alias, d.user, date, a.app, a.category, fmtSecs(a.time), a.time]);
-                });
-            });
+            const rows = [['Employee', 'Username', 'Date', 'Application', 'Category', 'Time Spent', 'Seconds']];
+            allData.forEach(d => d.apps.forEach(a => rows.push([d.alias, d.user, endDate, a.app, a.category, fmtSecs(a.time), a.time])));
             XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'All App Usage');
         }
-
         if (sheets.productive) {
-            const rows = [['Employee', 'Username', 'Date', 'Application', 'Time Spent', 'Time (seconds)']];
-            allData.forEach(d => {
-                d.apps.filter(a => a.category === 'Productive').forEach(a => {
-                    rows.push([d.alias, d.user, date, a.app, fmtSecs(a.time), a.time]);
-                });
-            });
+            const rows = [['Employee', 'Username', 'Date', 'Application', 'Time Spent', 'Seconds']];
+            allData.forEach(d => d.apps.filter(a => a.category === 'Productive').forEach(a =>
+                rows.push([d.alias, d.user, endDate, a.app, fmtSecs(a.time), a.time])));
             XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Productive Apps');
         }
-
         if (sheets.unproductive) {
-            const rows = [['Employee', 'Username', 'Date', 'Application', 'Time Spent', 'Time (seconds)']];
-            allData.forEach(d => {
-                d.apps.filter(a => a.category === 'Unproductive').forEach(a => {
-                    rows.push([d.alias, d.user, date, a.app, fmtSecs(a.time), a.time]);
-                });
-            });
+            const rows = [['Employee', 'Username', 'Date', 'Application', 'Time Spent', 'Seconds']];
+            allData.forEach(d => d.apps.filter(a => a.category === 'Unproductive').forEach(a =>
+                rows.push([d.alias, d.user, endDate, a.app, fmtSecs(a.time), a.time])));
             XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Unproductive Apps');
         }
-
         if (sheets.timeline) {
             const rows = [['Employee', 'Username', 'Date', 'Hour', 'Active Minutes']];
             allData.forEach(d => {
                 const hourly = computeHourlyActivity(d.timeline);
                 hourly.forEach((secs, h) => {
-                    const label = h === 0 ? '12AM' : h === 12 ? '12PM' : h < 12 ? `${h}AM` : `${h-12}PM`;
-                    rows.push([d.alias, d.user, date, label, Math.round(secs / 60)]);
+                    const lbl = h === 0 ? '12AM' : h === 12 ? '12PM' : h < 12 ? `${h}AM` : `${h-12}PM`;
+                    rows.push([d.alias, d.user, endDate, lbl, Math.round(secs / 60)]);
                 });
             });
             XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Hourly Timeline');
         }
-
-        if (wb.SheetNames.length === 0) {
-            document.getElementById('exportError').textContent = 'Select at least one sheet to include.';
-            document.getElementById('exportError').classList.remove('hidden');
-            return;
+    } else {
+        if (sheets.summary) {
+            const rows = [['Employee', 'Username', 'Period', 'Total Productive Hours', 'Total Active Hours', 'Avg Productivity Score']];
+            allData.forEach(d => rows.push([
+                d.alias, d.user, periodStr,
+                d.rangeSummary ? d.rangeSummary.total_productive_hours      : '—',
+                d.rangeSummary ? d.rangeSummary.total_active_hours          : '—',
+                d.rangeSummary ? d.rangeSummary.avg_productivity_score + '%': '—',
+            ]));
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Summary');
         }
-
-        const filename = `productivity_${scope === 'all' ? 'all' : (_allGroups.find(g=>g.id===scope)?.name || scope).replace(/\s+/g,'_')}_${date}.xlsx`;
-        XLSX.writeFile(wb, filename);
-        closeExportModal();
-    } catch (e) {
-        document.getElementById('exportError').textContent = e.message || 'Export failed';
-        document.getElementById('exportError').classList.remove('hidden');
-    } finally {
-        btn.disabled = false;
-        document.getElementById('exportProgress').classList.add('hidden');
+        if (sheets.apps || sheets.productive || sheets.unproductive) {
+            const dailyRows = [['Employee', 'Username', 'Date', 'Day', 'Productive Hours', 'Active Hours', 'Productivity Score']];
+            allData.forEach(d => (d.rangeDaily || []).forEach(day =>
+                dailyRows.push([d.alias, d.user, day.date, day.day_name, day.productive_hours, day.active_hours, day.productivity_score + '%'])
+            ));
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(dailyRows), 'Daily Breakdown');
+        }
+        if (sheets.apps) {
+            const rows = [['Employee', 'Username', 'Period', 'Application', 'Category', 'Total Hours']];
+            allData.forEach(d => (d.rangeApps || []).forEach(a =>
+                rows.push([d.alias, d.user, periodStr, a.app, a.category, a.hours])));
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'App Usage');
+        }
+        if (sheets.productive) {
+            const rows = [['Employee', 'Username', 'Period', 'Application', 'Total Hours']];
+            allData.forEach(d => (d.rangeApps || []).filter(a => a.category === 'Productive').forEach(a =>
+                rows.push([d.alias, d.user, periodStr, a.app, a.hours])));
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Productive Apps');
+        }
+        if (sheets.unproductive) {
+            const rows = [['Employee', 'Username', 'Period', 'Application', 'Total Hours']];
+            allData.forEach(d => (d.rangeApps || []).filter(a => a.category === 'Unproductive').forEach(a =>
+                rows.push([d.alias, d.user, periodStr, a.app, a.hours])));
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Unproductive Apps');
+        }
     }
+
+    if (wb.SheetNames.length === 0) throw new Error('Select at least one sheet to include.');
+
+    const scopeName   = scope === 'all' ? 'all' : (_allGroups.find(g => g.id === scope)?.name || scope).replace(/\s+/g, '_');
+    const periodLabel = period === '1d' ? endDate : `${startDate}_to_${endDate}`;
+    XLSX.writeFile(wb, `productivity_${scopeName}_${periodLabel}.xlsx`);
+}
+
+async function renderChartPNG(config, w, h) {
+    return new Promise(resolve => {
+        const canvas  = document.createElement('canvas');
+        canvas.width  = w;
+        canvas.height = h;
+        const chart = new Chart(canvas, {
+            ...config,
+            options: { ...(config.options || {}), animation: false, responsive: false },
+        });
+        requestAnimationFrame(() => {
+            const png = canvas.toDataURL('image/png');
+            chart.destroy();
+            resolve(png);
+        });
+    });
+}
+
+async function generatePDF(emp, period, endDate, startDate) {
+    if (!window.jspdf) throw new Error('PDF library not loaded. Refresh the page and try again.');
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+    const PW = 210, M = 14, CW = 182;
+    const fmtSecs = s => s ? `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m` : '—';
+    const INDIGO  = [79,  70,  229];
+    const EMERALD = [16,  185, 129];
+    const AMBER   = [245, 158, 11];
+    const SLATE8  = [30,  41,  59];
+    const SLATE5  = [100, 116, 139];
+    const SLATE1  = [248, 250, 252];
+
+    // Header bar
+    doc.setFillColor(...INDIGO);
+    doc.rect(0, 0, PW, 18, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.setTextColor(255, 255, 255);
+    doc.text('ProdAnalytics', M, 12);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.text('Productivity Report', PW - M, 12, { align: 'right' });
+
+    // Employee info
+    let y = 26;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(15);
+    doc.setTextColor(...SLATE8);
+    doc.text(emp.alias, M, y);
+    y += 5;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8.5);
+    doc.setTextColor(...SLATE5);
+    if (period === '1d') {
+        doc.text(`${emp.user}   •   Date: ${endDate}`, M, y);
+    } else {
+        doc.text(`${emp.user}   •   ${period === '7d' ? '7-Day' : '30-Day'} period: ${startDate} → ${endDate}`, M, y);
+    }
+    y += 10;
+
+    if (period === '1d') {
+        // KPI cards
+        const prodSecs    = (emp.apps || []).filter(a => a.category === 'Productive').reduce((s, a) => s + a.time, 0);
+        const kpis = [
+            { label: 'Active Time',        value: fmtSecs(emp.summary?.total_active_time),        color: INDIGO },
+            { label: 'Productive Time',    value: fmtSecs(prodSecs),                               color: EMERALD },
+            { label: 'Productivity Score', value: (emp.summary?.productivity_score || 0) + '%',   color: AMBER },
+            { label: 'Top App',            value: emp.summary?.top_app || '—',                     color: SLATE5 },
+        ];
+        const kW = (CW - 9) / 4;
+        kpis.forEach((kpi, i) => {
+            const x = M + i * (kW + 3);
+            doc.setFillColor(...SLATE1);
+            doc.roundedRect(x, y, kW, 22, 2, 2, 'F');
+            doc.setFillColor(...kpi.color);
+            doc.rect(x, y, kW, 1.5, 'F');
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(6.5);
+            doc.setTextColor(...SLATE5);
+            doc.text(kpi.label.toUpperCase(), x + 3, y + 7);
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(10);
+            doc.setTextColor(...kpi.color);
+            doc.text(String(kpi.value), x + 3, y + 16, { maxWidth: kW - 6 });
+        });
+        y += 28;
+
+        // Charts side by side
+        const unprodSecs  = (emp.apps || []).filter(a => a.category === 'Unproductive').reduce((s, a) => s + a.time, 0);
+        const neutralSecs = (emp.apps || []).filter(a => a.category === 'Neutral').reduce((s, a) => s + a.time, 0);
+
+        const doughnutPng = await renderChartPNG({
+            type: 'doughnut',
+            data: {
+                labels: ['Productive', 'Unproductive', 'Neutral'],
+                datasets: [{ data: [prodSecs, unprodSecs, neutralSecs || 0],
+                    backgroundColor: ['rgba(16,185,129,0.85)', 'rgba(239,68,68,0.85)', 'rgba(148,163,184,0.7)'],
+                    borderWidth: 2 }]
+            },
+            options: { plugins: { legend: { position: 'bottom', labels: { font: { size: 11 }, boxWidth: 14 } } } }
+        }, 360, 300);
+
+        const hourly   = computeHourlyActivity(emp.timeline || []);
+        const hrLabels = hourly.map((_, h) => h % 3 === 0
+            ? (h === 0 ? '12a' : h === 12 ? '12p' : h < 12 ? `${h}a` : `${h-12}p`) : '');
+        const barPng = await renderChartPNG({
+            type: 'bar',
+            data: {
+                labels: hrLabels,
+                datasets: [{ label: 'Active min', data: hourly.map(s => Math.round(s / 60)),
+                    backgroundColor: 'rgba(99,102,241,0.75)', borderRadius: 3, borderSkipped: false }]
+            },
+            options: {
+                plugins: { legend: { display: false } },
+                scales: { x: { ticks: { font: { size: 9 } } }, y: { beginAtZero: true, ticks: { font: { size: 9 } } } }
+            }
+        }, 480, 270);
+
+        const cW = (CW - 6) / 2, cH = 60;
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(8);
+        doc.setTextColor(...SLATE8);
+        doc.text('Activity Breakdown', M + cW / 2, y, { align: 'center' });
+        doc.text('Hourly Activity', M + cW + 6 + cW / 2, y, { align: 'center' });
+        y += 3;
+        doc.addImage(doughnutPng, 'PNG', M, y, cW, cH);
+        doc.addImage(barPng, 'PNG', M + cW + 6, y, cW, cH);
+        y += cH + 10;
+
+        // App table
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(9);
+        doc.setTextColor(...SLATE8);
+        doc.text('Application Usage', M, y);
+        y += 3;
+        doc.autoTable({
+            head: [['Application', 'Category', 'Time Spent']],
+            body: (emp.apps || []).slice(0, 30).map(a => [a.app, a.category, fmtSecs(a.time)]),
+            startY: y,
+            margin: { left: M, right: M },
+            styles: { fontSize: 7.5, cellPadding: 2 },
+            headStyles: { fillColor: INDIGO, textColor: 255, fontStyle: 'bold', fontSize: 8 },
+            alternateRowStyles: { fillColor: SLATE1 },
+            columnStyles: { 0: { cellWidth: 95 }, 1: { cellWidth: 42 }, 2: { cellWidth: 38 } },
+        });
+
+    } else {
+        // Summary cards (3)
+        const rs = emp.rangeSummary || {};
+        const cards = [
+            { label: 'Total Productive Hours', value: (rs.total_productive_hours || 0) + 'h', color: EMERALD },
+            { label: 'Total Active Hours',     value: (rs.total_active_hours || 0) + 'h',     color: INDIGO },
+            { label: 'Avg Productivity',       value: (rs.avg_productivity_score || 0) + '%', color: AMBER },
+        ];
+        const cW3 = (CW - 6) / 3;
+        cards.forEach((card, i) => {
+            const x = M + i * (cW3 + 3);
+            doc.setFillColor(...SLATE1);
+            doc.roundedRect(x, y, cW3, 22, 2, 2, 'F');
+            doc.setFillColor(...card.color);
+            doc.rect(x, y, cW3, 1.5, 'F');
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(6.5);
+            doc.setTextColor(...SLATE5);
+            doc.text(card.label.toUpperCase(), x + 3, y + 7);
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(13);
+            doc.setTextColor(...card.color);
+            doc.text(card.value, x + 3, y + 17);
+        });
+        y += 28;
+
+        // Line chart
+        const daily  = emp.rangeDaily || [];
+        const labels = daily.map(d => period === '7d' ? d.day_name : d.date.slice(5));
+        const linePng = await renderChartPNG({
+            type: 'line',
+            data: {
+                labels,
+                datasets: [
+                    { label: 'Productive Hrs', data: daily.map(d => d.productive_hours),
+                      borderColor: 'rgba(99,102,241,1)', backgroundColor: 'rgba(99,102,241,0.08)',
+                      fill: true, tension: 0.35, pointRadius: 4, yAxisID: 'yH' },
+                    { label: 'Active Hrs', data: daily.map(d => d.active_hours),
+                      borderColor: 'rgba(16,185,129,1)', backgroundColor: 'rgba(16,185,129,0.06)',
+                      fill: false, tension: 0.35, pointRadius: 4, yAxisID: 'yH' },
+                    { label: 'Score %', data: daily.map(d => d.productivity_score),
+                      borderColor: 'rgba(245,158,11,1)', borderDash: [5, 3],
+                      tension: 0.35, pointRadius: 3, yAxisID: 'yS' },
+                ]
+            },
+            options: {
+                plugins: { legend: { position: 'bottom', labels: { font: { size: 11 }, boxWidth: 14 } } },
+                scales: {
+                    yH: { type: 'linear', position: 'left',  beginAtZero: true, ticks: { font: { size: 10 } } },
+                    yS: { type: 'linear', position: 'right', min: 0, max: 100,  ticks: { font: { size: 10 } } },
+                    x:  { ticks: { font: { size: 10 } } }
+                }
+            }
+        }, 700, 310);
+
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(9);
+        doc.setTextColor(...SLATE8);
+        doc.text('Daily Activity Overview', M, y);
+        y += 3;
+        const lineH = 68;
+        doc.addImage(linePng, 'PNG', M, y, CW, lineH);
+        y += lineH + 10;
+
+        // App table
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(9);
+        doc.setTextColor(...SLATE8);
+        doc.text('Top Applications', M, y);
+        y += 3;
+        doc.autoTable({
+            head: [['Application', 'Category', 'Total Hours']],
+            body: (emp.rangeApps || []).slice(0, 30).map(a => [a.app, a.category, a.hours + 'h']),
+            startY: y,
+            margin: { left: M, right: M },
+            styles: { fontSize: 7.5, cellPadding: 2 },
+            headStyles: { fillColor: INDIGO, textColor: 255, fontStyle: 'bold', fontSize: 8 },
+            alternateRowStyles: { fillColor: SLATE1 },
+            columnStyles: { 0: { cellWidth: 108 }, 1: { cellWidth: 42 }, 2: { cellWidth: 25 } },
+        });
+    }
+
+    // Footer on every page
+    const totalPages = doc.getNumberOfPages();
+    for (let p = 1; p <= totalPages; p++) {
+        doc.setPage(p);
+        doc.setFillColor(...SLATE1);
+        doc.rect(0, 287, PW, 10, 'F');
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(7);
+        doc.setTextColor(148, 163, 184);
+        doc.text(`Generated by ProdAnalytics  •  Page ${p} of ${totalPages}`, PW / 2, 293, { align: 'center' });
+    }
+
+    const safeName    = emp.alias.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const periodLabel = period === '1d' ? endDate : `${startDate}_to_${endDate}`;
+    doc.save(`report_${safeName}_${periodLabel}.pdf`);
 }
 
 // ── Notifications ─────────────────────────────────────────────────────────────────
@@ -2917,7 +3995,7 @@ document.addEventListener('click', (e) => {
 
 // ── Agent page ────────────────────────────────────────────────────────────────────
 function switchAgentTab(tab) {
-    ['install','ui','uninstall'].forEach(t => {
+    ['install','ui','migrate','uninstall'].forEach(t => {
         const btn   = document.getElementById(`agentTab${t.charAt(0).toUpperCase()+t.slice(1)}`);
         const panel = document.getElementById(`agentPanel${t.charAt(0).toUpperCase()+t.slice(1)}`);
         const active = t === tab;
@@ -3036,9 +4114,8 @@ async function settingsRunPurge() {
 window.onload = async () => {
     if (authToken) { await initApp(); }
     else { showLoginPage(); lucide.createIcons(); }
-    document.getElementById('datePicker').onchange         = loadUserData;
-    document.getElementById('overviewDatePicker').onchange = loadOverview;
-    document.getElementById('groupDatePicker').onchange    = loadGroupData;
+    document.getElementById('datePicker').onchange      = loadUserData;
+    document.getElementById('groupDatePicker').onchange = loadGroupData;
 };
 </script>
 </body>
