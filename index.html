@@ -166,12 +166,6 @@
                     <p class="text-sm text-slate-400 mt-0.5">Today's productivity across all employees</p>
                 </div>
                 <div class="flex items-center gap-3">
-                    <button onclick="openDatePicker('overview', this)" id="overviewDateBtn"
-                            class="flex items-center gap-2 px-4 py-2.5 border border-slate-200 rounded-xl text-sm font-medium bg-white hover:bg-slate-50 text-slate-700 transition-colors shadow-sm">
-                        <i data-lucide="calendar" class="w-4 h-4 text-indigo-500"></i>
-                        <span class="cal-btn-text">Today</span>
-                        <i data-lucide="chevron-down" class="w-3.5 h-3.5 text-slate-400 ml-1"></i>
-                    </button>
                     <button onclick="loadOverview()" class="p-2 border border-slate-200 rounded-lg hover:bg-white transition-all text-slate-500" title="Refresh">
                         <i data-lucide="refresh-cw" class="w-4 h-4"></i>
                     </button>
@@ -267,12 +261,6 @@
                     <p class="text-sm text-slate-400 mt-0.5">All onboarded employees</p>
                 </div>
                 <div class="flex items-center gap-3">
-                    <button onclick="openDatePicker('emp', this)" id="empDateBtn"
-                            class="flex items-center gap-2 px-4 py-2.5 border border-slate-200 rounded-xl text-sm font-medium bg-white hover:bg-slate-50 text-slate-700 transition-colors shadow-sm">
-                        <i data-lucide="calendar" class="w-4 h-4 text-indigo-500"></i>
-                        <span class="cal-btn-text">Today</span>
-                        <i data-lucide="chevron-down" class="w-3.5 h-3.5 text-slate-400 ml-1"></i>
-                    </button>
                     <div class="relative">
                         <i data-lucide="search" class="absolute left-3 top-2.5 w-3.5 h-3.5 text-slate-400 pointer-events-none"></i>
                         <input type="text" id="empSearch" placeholder="Search employee..." oninput="filterEmpList(this.value)"
