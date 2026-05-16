@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Enterprise Productivity Dashboard</title>
+    <title>Productivity Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
@@ -166,6 +166,12 @@
                     <p class="text-sm text-slate-400 mt-0.5">Today's productivity across all employees</p>
                 </div>
                 <div class="flex items-center gap-3">
+                    <button onclick="openDatePicker('overview', this)" id="overviewDateBtn"
+                            class="flex items-center gap-2 px-4 py-2.5 border border-slate-200 rounded-xl text-sm font-medium bg-white hover:bg-slate-50 text-slate-700 transition-colors shadow-sm">
+                        <i data-lucide="calendar" class="w-4 h-4 text-indigo-500"></i>
+                        <span class="cal-btn-text">Today</span>
+                        <i data-lucide="chevron-down" class="w-3.5 h-3.5 text-slate-400 ml-1"></i>
+                    </button>
                     <button onclick="loadOverview()" class="p-2 border border-slate-200 rounded-lg hover:bg-white transition-all text-slate-500" title="Refresh">
                         <i data-lucide="refresh-cw" class="w-4 h-4"></i>
                     </button>
@@ -664,6 +670,44 @@
                     </div>
                 </div>
 
+                <!-- Linux install command -->
+                <div class="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
+                    <div class="flex items-center gap-3 mb-4">
+                        <div class="bg-slate-800 p-2.5 rounded-xl"><i data-lucide="terminal" class="w-4 h-4 text-yellow-400"></i></div>
+                        <div>
+                            <div class="flex items-center gap-2">
+                                <h3 class="font-bold text-slate-800">Linux — One Command Install</h3>
+                                <span class="text-xs font-semibold bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full">Ubuntu · Debian · Fedora · RHEL · Mint</span>
+                            </div>
+                            <p class="text-xs text-slate-400 mt-0.5">Installs agent + tray UI. Run in any terminal on the employee machine — no sudo required for per-user install.</p>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-3 bg-slate-900 rounded-2xl px-5 py-4 mb-4">
+                        <span class="text-slate-500 font-mono text-sm shrink-0">$</span>
+                        <code id="linuxInstallCmd" class="flex-1 text-sm text-yellow-300 font-mono break-all">Loading...</code>
+                        <button id="copyLinuxBtn" onclick="copyAgentCmd('linuxInstallCmd','copyLinuxBtn')" class="shrink-0 p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700 transition-all" title="Copy">
+                            <i data-lucide="copy" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+                    <div class="grid grid-cols-2 gap-3 mb-4">
+                        <div class="flex items-start gap-2.5 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2.5">
+                            <i data-lucide="check-circle" class="w-4 h-4 text-emerald-500 shrink-0 mt-0.5"></i>
+                            <p class="text-xs text-emerald-700 leading-relaxed">Auto-detects apt / dnf / pacman / zypper — installs xdotool, xprintidle, Python venv</p>
+                        </div>
+                        <div class="flex items-start gap-2.5 bg-yellow-50 border border-yellow-100 rounded-xl px-3 py-2.5">
+                            <i data-lucide="check-circle" class="w-4 h-4 text-yellow-600 shrink-0 mt-0.5"></i>
+                            <p class="text-xs text-yellow-700 leading-relaxed">Registers systemd user service + XDG autostart · starts agent immediately</p>
+                        </div>
+                    </div>
+                    <div class="flex items-start gap-3 bg-blue-50 border border-blue-100 rounded-2xl px-4 py-3">
+                        <i data-lucide="info" class="w-4 h-4 text-blue-500 shrink-0 mt-0.5"></i>
+                        <p class="text-xs text-blue-700 leading-relaxed">
+                            Requires Python 3.9+ and an active X11 or Wayland session. After install, manage with:
+                            <code class="bg-blue-100 px-1 rounded mx-0.5">systemctl --user status telemetry-agent</code>
+                        </p>
+                    </div>
+                </div>
+
                 <div class="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
                     <h3 class="font-bold text-slate-800 mb-3">Manual Downloads</h3>
                     <div class="flex gap-3 flex-wrap">
@@ -675,6 +719,9 @@
                         </a>
                         <a id="scriptDownloadBtn" href="#" class="flex items-center gap-2.5 px-5 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-700 font-semibold rounded-xl text-sm transition-all">
                             <i data-lucide="file-code" class="w-4 h-4"></i>install_prodanalytics.ps1
+                        </a>
+                        <a id="linuxBundleBtn" href="#" class="flex items-center gap-2.5 px-5 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-700 font-semibold rounded-xl text-sm transition-all">
+                            <i data-lucide="package" class="w-4 h-4"></i>linux-telemetry-agent.zip
                         </a>
                     </div>
                 </div>
@@ -740,7 +787,7 @@
                 <div class="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
                     <h3 class="font-bold text-slate-800 mb-3">Manual Download</h3>
                     <div class="flex gap-3 flex-wrap">
-                        <a id="uiDownloadBtn" href="#" class="flex items-center gap-2.5 px-5 py-2.5 bg-purple-600 hover:bg-purple-700 text-white font-semibold rounded-xl text-sm transition-all">
+                        <a id="uiDownloadBtn2" href="#" class="flex items-center gap-2.5 px-5 py-2.5 bg-purple-600 hover:bg-purple-700 text-white font-semibold rounded-xl text-sm transition-all">
                             <i data-lucide="download" class="w-4 h-4"></i>telemetry_ui.exe
                         </a>
                     </div>
@@ -1178,6 +1225,7 @@
                 <button id="calQ-7d"        onclick="calQuickSelect('7d')"        class="cal-q w-full text-left px-3 py-2 rounded-xl text-sm font-medium transition-colors text-slate-600 hover:bg-slate-100">Last 7 days</button>
                 <button id="calQ-30d"       onclick="calQuickSelect('30d')"       class="cal-q w-full text-left px-3 py-2 rounded-xl text-sm font-medium transition-colors text-slate-600 hover:bg-slate-100">Last 30 days</button>
                 <button id="calQ-month"     onclick="calQuickSelect('month')"     class="cal-q w-full text-left px-3 py-2 rounded-xl text-sm font-medium transition-colors text-slate-600 hover:bg-slate-100">This month</button>
+                <button id="calQ-custom"    onclick="calQuickSelect('custom')"    class="cal-q w-full text-left px-3 py-2 rounded-xl text-sm font-medium transition-colors text-slate-600 hover:bg-slate-100">Custom range</button>
             </div>
         </div>
         <!-- Calendar panel -->
@@ -1498,12 +1546,16 @@ async function initApp() {
     document.getElementById('agentDownloadBtn').href  = `${base}/download-agent`;
     document.getElementById('scriptDownloadBtn').href = `${base}/install-script`;
     document.getElementById('uiDownloadBtn').href     = `${base}/download-ui`;
+    document.getElementById('uiDownloadBtn2').href    = `${base}/download-ui`;
+    document.getElementById('linuxBundleBtn').href    = `${base}/download-linux-bundle`;
     document.getElementById('installCmd').textContent =
         `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "iwr '${base}/install-script' -OutFile ([IO.Path]::GetTempPath()+'pa_install.ps1') -UseBasicParsing; & ([IO.Path]::GetTempPath()+'pa_install.ps1')"`;
     document.getElementById('uiInstallCmd').textContent =
         `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "iwr '${base}/download-ui' -OutFile ([IO.Path]::GetTempPath()+'telemetry_ui.zip') -UseBasicParsing; Expand-Archive ([IO.Path]::GetTempPath()+'telemetry_ui.zip') -DestinationPath ([IO.Path]::GetTempPath()+'telemetry_ui') -Force; Start-Process ([IO.Path]::GetTempPath()+'telemetry_ui\\telemetry_ui.exe')"`;
     document.getElementById('uninstallCmd').textContent =
         `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "iwr '${base}/uninstall-script' -OutFile ([IO.Path]::GetTempPath()+'pa_uninstall.ps1') -UseBasicParsing; & ([IO.Path]::GetTempPath()+'pa_uninstall.ps1')"`;
+    document.getElementById('linuxInstallCmd').textContent =
+        `curl -fsSL '${base}/install-script-linux' | bash`;
 
     // Version badge
     try {
@@ -2090,8 +2142,9 @@ function renderEmpGrid(rows) {
 
 // ── User detail ───────────────────────────────────────────────────────────────────
 let categoryChart = null, appChart = null, peakChart = null;
-let _userRangeMode = 'today';
-let _userRangeChart = null;
+let _userRangeMode   = 'today';
+let _userCustomRange = null;   // { start: 'YYYY-MM-DD', end: 'YYYY-MM-DD' }
+let _userRangeChart  = null;
 
 async function selectUser(userId) {
     _currentUserId = userId;
@@ -2105,7 +2158,7 @@ async function selectUser(userId) {
     await loadUserData();
 }
 
-function setUserRangeMode(mode) {
+function setUserRangeMode(mode, customRange) {
     _userRangeMode = mode;
     const dayContent = document.getElementById('userDayContent');
     const rangePanel = document.getElementById('userRangePanel');
@@ -2114,6 +2167,11 @@ function setUserRangeMode(mode) {
         dayContent.classList.remove('hidden');
         rangePanel.classList.add('hidden');
         loadUserData();
+    } else if (mode === 'custom') {
+        _userCustomRange = customRange;
+        dayContent.classList.add('hidden');
+        rangePanel.classList.remove('hidden');
+        loadUserRangeData(null, customRange.start, customRange.end);
     } else {
         dayContent.classList.add('hidden');
         rangePanel.classList.remove('hidden');
@@ -2121,7 +2179,7 @@ function setUserRangeMode(mode) {
     }
 }
 
-async function loadUserRangeData(days) {
+async function loadUserRangeData(days, explicitStart, explicitEnd) {
     if (!_currentUserId) return;
     const appsBody  = document.getElementById('rangeAppsTableBody');
     const appsEmpty = document.getElementById('rangeAppsTableEmpty');
@@ -2131,14 +2189,22 @@ async function loadUserRangeData(days) {
     document.getElementById('rangeAvgScore').textContent   = '…';
     document.getElementById('rangeActiveHours').textContent = '…';
 
-    const end   = new Date();
-    const start = new Date();
-    start.setDate(end.getDate() - days + 1);
     const fmt = d => d.toISOString().slice(0, 10);
+    let startStr, endStr;
+    if (explicitStart && explicitEnd) {
+        startStr = explicitStart;
+        endStr   = explicitEnd;
+    } else {
+        const end   = new Date();
+        const start = new Date();
+        start.setDate(end.getDate() - days + 1);
+        startStr = fmt(start);
+        endStr   = fmt(end);
+    }
 
     try {
         const res = await apiFetch(
-            `${API_BASE}/user-range?user=${encodeURIComponent(_currentUserId)}&start=${fmt(start)}&end=${fmt(end)}`
+            `${API_BASE}/user-range?user=${encodeURIComponent(_currentUserId)}&start=${startStr}&end=${endStr}`
         );
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
@@ -2148,10 +2214,12 @@ async function loadUserRangeData(days) {
         document.getElementById('rangeProdHours').textContent   = s.total_productive_hours.toFixed(1) + 'h';
         document.getElementById('rangeAvgScore').textContent    = s.avg_productivity_score ? `${s.avg_productivity_score}%` : '—';
         document.getElementById('rangeActiveHours').textContent = s.total_active_hours.toFixed(1) + 'h';
-        document.getElementById('rangeChartTitle').textContent  =
-            `Activity Over ${days === 7 ? '7 Days' : '30 Days'}`;
+        const fmtShortDate = s => { const d = new Date(s + 'T00:00:00'); return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
+        document.getElementById('rangeChartTitle').textContent  = explicitStart
+            ? `Activity: ${fmtShortDate(startStr)} – ${fmtShortDate(endStr)}`
+            : `Activity Over ${days === 7 ? '7 Days' : '30 Days'}`;
 
-        // Build chart labels: for 7d use day names (Mon), for 30d use MM-DD dates
+        // Build chart labels: for 7d use day names (Mon), for 30d/custom use MM-DD dates
         const labels      = data.daily.map(d => days === 7 ? d.day_name : d.date.slice(5));
         const prodHours   = data.daily.map(d => d.productive_hours);
         const activeHours = data.daily.map(d => d.active_hours);
@@ -3076,7 +3144,7 @@ function _calDisplayDate(str) {
 }
 
 function _calBtnLabel(quick, date) {
-    const map = { today: 'Today', yesterday: 'Yesterday', '7d': 'Last 7 days', '30d': 'Last 30 days', month: 'This month' };
+    const map = { today: 'Today', yesterday: 'Yesterday', '7d': 'Last 7 days', '30d': 'Last 30 days', month: 'This month', custom: 'Custom range' };
     if (quick && map[quick]) return map[quick];
     return date ? _calDisplayDate(date) : 'Select date';
 }
@@ -3086,25 +3154,33 @@ function openDatePicker(target, triggerEl) {
     const today = new Date();
 
     if (target === 'overview') {
-        const isRange = _overviewMode === 'range';
-        _calMode     = isRange ? 'range' : 'single';
-        _calQuick    = isRange ? (document.getElementById('overviewDateBtn').querySelector('.cal-btn-text').textContent.includes('7') ? '7d' : '30d') : 'today';
+        _calMode = 'single';
+        const todayStr = _fmtDate(today);
+        const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1);
+        const yesterdayStr = _fmtDate(yesterday);
+        _calQuick = _overviewDate === todayStr ? 'today' : (_overviewDate === yesterdayStr ? 'yesterday' : null);
         const d = new Date(_overviewDate + 'T00:00:00');
         _calViewYear = d.getFullYear(); _calViewMonth = d.getMonth();
-        _calSelected = isRange ? { start: _overviewDate, end: _fmtDate(today) } : { start: _overviewDate, end: _overviewDate };
+        _calSelected = { start: _overviewDate, end: _overviewDate };
+        ['7d','30d','month','custom'].forEach(k => { const b = document.getElementById(`calQ-${k}`); if (b) b.classList.add('hidden'); });
     } else if (target === 'user') {
         const isRange = _userRangeMode !== 'today';
-        _calMode     = isRange ? 'range' : 'single';
-        _calQuick    = _userRangeMode === 'today' ? 'today' : _userRangeMode;
-        const pickerVal = document.getElementById('datePicker').value || _fmtDate(today);
-        const d = new Date(pickerVal + 'T00:00:00');
-        _calViewYear = d.getFullYear(); _calViewMonth = d.getMonth();
-        if (isRange) {
+        _calMode  = isRange ? 'range' : 'single';
+        _calQuick = _userRangeMode === 'today' ? 'today' : _userRangeMode;
+        if (_userRangeMode === 'custom' && _userCustomRange) {
+            _calSelected = { start: _userCustomRange.start, end: _userCustomRange.end };
+            const d = new Date(_userCustomRange.start + 'T00:00:00');
+            _calViewYear = d.getFullYear(); _calViewMonth = d.getMonth();
+        } else if (isRange) {
             const days = _userRangeMode === '7d' ? 7 : 30;
             const st = new Date(today); st.setDate(today.getDate() - days + 1);
             _calSelected = { start: _fmtDate(st), end: _fmtDate(today) };
+            _calViewYear = today.getFullYear(); _calViewMonth = today.getMonth();
         } else {
+            const pickerVal = document.getElementById('datePicker').value || _fmtDate(today);
             _calSelected = { start: pickerVal, end: pickerVal };
+            const d = new Date(pickerVal + 'T00:00:00');
+            _calViewYear = d.getFullYear(); _calViewMonth = d.getMonth();
         }
     } else if (target === 'group') {
         _calMode = 'single';
@@ -3137,6 +3213,7 @@ function openDatePicker(target, triggerEl) {
 }
 
 function closeDatePicker() {
+    ['7d','30d','month','custom'].forEach(k => { const b = document.getElementById(`calQ-${k}`); if (b) b.classList.remove('hidden'); });
     document.getElementById('calPickerBg').classList.add('hidden');
     document.getElementById('calPicker').classList.add('hidden');
 }
@@ -3146,21 +3223,19 @@ function confirmDatePicker() {
     const end = _calSelected.end || _calSelected.start;
 
     if (_calTarget === 'overview') {
-        if (_calQuick === '7d' || _calQuick === '30d') {
-            const days = _calQuick === '7d' ? 7 : 30;
-            _overviewDate = _calSelected.start;
-            _calSetBtnLabel('overviewDateBtn', _calBtnLabel(_calQuick));
-            loadOverviewRange(days);
-        } else {
-            _overviewDate = _calSelected.start;
-            _overviewMode = 'single';
-            _calSetBtnLabel('overviewDateBtn', _calBtnLabel(_calQuick, _calSelected.start));
-            loadOverview();
-        }
+        _overviewDate = _calSelected.start;
+        _overviewMode = 'single';
+        _calSetBtnLabel('overviewDateBtn', _calBtnLabel(_calQuick, _calSelected.start));
+        loadOverview();
     } else if (_calTarget === 'user') {
         if (_calQuick === '7d' || _calQuick === '30d') {
             _calSetBtnLabel('userDateBtn', _calBtnLabel(_calQuick));
             setUserRangeMode(_calQuick);
+        } else if (_calSelected?.start && _calSelected?.end && _calSelected.start !== _calSelected.end) {
+            const start = _calSelected.start, end = _calSelected.end;
+            const fmtShort = s => { const d = new Date(s + 'T00:00:00'); return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
+            _calSetBtnLabel('userDateBtn', `${fmtShort(start)} – ${fmtShort(end)}`);
+            setUserRangeMode('custom', { start, end });
         } else {
             const date = _calSelected.start;
             document.getElementById('datePicker').value = date;
@@ -3210,6 +3285,9 @@ function calQuickSelect(key) {
         _calMode = 'range';
         const st = new Date(today.getFullYear(), today.getMonth(), 1);
         _calSelected = { start: _fmtDate(st), end: _fmtDate(today) };
+    } else if (key === 'custom') {
+        _calMode = 'range';
+        _calSelected = null;
     }
     _calViewYear = today.getFullYear(); _calViewMonth = today.getMonth();
     renderCalendarGrid();
@@ -3302,7 +3380,7 @@ function _updateCalRangeDisplay() {
 }
 
 function updateCalQuickBtns() {
-    ['today','yesterday','7d','30d','month'].forEach(k => {
+    ['today','yesterday','7d','30d','month','custom'].forEach(k => {
         const btn = document.getElementById(`calQ-${k}`);
         if (!btn) return;
         if (k === _calQuick) {

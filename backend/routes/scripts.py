@@ -83,7 +83,7 @@ async def install_script(request: Request):
     """PowerShell installer — downloads ZIPs, extracts to Program Files, runs --install."""
     base = _public_base(request)
     script = f"""\
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'SilentlyContinue'
 $ServerUrl = '{base}'
 
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {{
@@ -95,56 +95,122 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 
 Write-Host ""
 Write-Host "=== ProdAnalytics Installer ===" -ForegroundColor Cyan
-Write-Host "Server: $ServerUrl"
+Write-Host "Server : $ServerUrl"
 Write-Host ""
 
 Write-Host "[1/4] Downloading agent..." -ForegroundColor Cyan
 $AgentZip = "$env:TEMP\\agent.zip"
 $AgentDir = "C:\\Program Files\\TelemetryAgent"
-Invoke-WebRequest -Uri "$ServerUrl/download-agent-zip" -OutFile $AgentZip -UseBasicParsing
-Unblock-File -Path $AgentZip -ErrorAction SilentlyContinue
+Invoke-WebRequest -Uri "$ServerUrl/download-agent-zip" -OutFile $AgentZip -UseBasicParsing -ErrorAction Stop
+Unblock-File -Path $AgentZip
+Remove-Item -Recurse -Force $AgentDir
 New-Item -ItemType Directory -Path $AgentDir -Force | Out-Null
-Expand-Archive -Path $AgentZip -DestinationPath $AgentDir -Force
-Get-ChildItem -Path $AgentDir -Recurse | Unblock-File -ErrorAction SilentlyContinue
-Remove-Item $AgentZip -Force -ErrorAction SilentlyContinue
-Write-Host "    Done" -ForegroundColor Green
+Expand-Archive -Path $AgentZip -DestinationPath $AgentDir -Force -ErrorAction Stop
+Get-ChildItem -Path $AgentDir -Recurse | Unblock-File
+Remove-Item $AgentZip -Force
+Write-Host "      OK" -ForegroundColor Green
 
 Write-Host "[2/4] Installing agent..." -ForegroundColor Cyan
 & "$AgentDir\\telemetry_agent.exe" --install --server-url $ServerUrl
-Write-Host "    Done" -ForegroundColor Green
+Write-Host "      Agent installed and started" -ForegroundColor Green
 
 Write-Host "[3/4] Downloading UI companion..." -ForegroundColor Cyan
 $UiZip = "$env:TEMP\\ui.zip"
 $UiDir = "C:\\Program Files\\TelemetryUI"
 $UiExe = "$UiDir\\telemetry_ui.exe"
-Invoke-WebRequest -Uri "$ServerUrl/download-ui" -OutFile $UiZip -UseBasicParsing
-Unblock-File -Path $UiZip -ErrorAction SilentlyContinue
+Invoke-WebRequest -Uri "$ServerUrl/download-ui" -OutFile $UiZip -UseBasicParsing -ErrorAction Stop
+Unblock-File -Path $UiZip
+Remove-Item -Recurse -Force $UiDir
 New-Item -ItemType Directory -Path $UiDir -Force | Out-Null
-Expand-Archive -Path $UiZip -DestinationPath $UiDir -Force
-Get-ChildItem -Path $UiDir -Recurse | Unblock-File -ErrorAction SilentlyContinue
-Remove-Item $UiZip -Force -ErrorAction SilentlyContinue
-Write-Host "    Done" -ForegroundColor Green
+Expand-Archive -Path $UiZip -DestinationPath $UiDir -Force -ErrorAction Stop
+Get-ChildItem -Path $UiDir -Recurse | Unblock-File
+Remove-Item $UiZip -Force
+Write-Host "      OK" -ForegroundColor Green
 
 Write-Host "[4/4] Setting up UI autostart..." -ForegroundColor Cyan
 schtasks /delete /tn TelemetryUI /f 2>$null
-$UiAction   = New-ScheduledTaskAction  -Execute $UiExe
-$UiTrigger  = New-ScheduledTaskTrigger -AtLogOn
-$UiSettings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit 0 -MultipleInstances IgnoreNew
-Register-ScheduledTask -TaskName TelemetryUI -Action $UiAction -Trigger $UiTrigger -Settings $UiSettings -RunLevel Limited -Force | Out-Null
+$action   = New-ScheduledTaskAction  -Execute $UiExe
+$trigger  = New-ScheduledTaskTrigger -AtLogOn
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit 0 -MultipleInstances IgnoreNew
+Register-ScheduledTask -TaskName TelemetryUI -Action $action -Trigger $trigger -Settings $settings -RunLevel Limited -Force | Out-Null
 Start-Process $UiExe
-Write-Host "    Done" -ForegroundColor Green
+Write-Host "      Registered and launched" -ForegroundColor Green
 
 Write-Host ""
-Write-Host "==================================================" -ForegroundColor Cyan
+Write-Host "=====================================================" -ForegroundColor Cyan
 Write-Host " Installation complete!" -ForegroundColor Green
-Write-Host "==================================================" -ForegroundColor Cyan
-Write-Host " Agent : C:\\Program Files\\TelemetryAgent\\telemetry_agent.exe"
-Write-Host " UI    : $UiExe"
-Write-Host " Log   : C:\\ProgramData\\TelemetryAgent\\agent.log"
+Write-Host "=====================================================" -ForegroundColor Cyan
+Write-Host " Agent  : C:\\Program Files\\TelemetryAgent\\telemetry_agent.exe"
+Write-Host " UI     : $UiExe"
+Write-Host " Log    : C:\\ProgramData\\TelemetryAgent\\agent.log"
+Write-Host " Both start automatically at every Windows login." -ForegroundColor Yellow
 Write-Host ""
 Read-Host "Press Enter to close"
 """
     return PlainTextResponse(content=script, media_type="text/plain")
+
+
+@router.get("/install-script-linux")
+async def install_script_linux(request: Request):
+    """
+    Bash installer for Linux.  Served as a static script with SERVER_URL injected.
+    Single source of truth — linux/install.sh is the canonical copy.
+
+    curl -fsSL <server>/install-script-linux | bash
+    """
+    base = _public_base(request)
+    install_sh = Path(__file__).parent.parent.parent / "linux" / "install.sh"
+    if not install_sh.exists():
+        raise HTTPException(status_code=404,
+                            detail="linux/install.sh not found in repo")
+
+    content = install_sh.read_text(encoding="utf-8")
+
+    # Inject the server URL so `curl | bash` works without any prompt.
+    # The script uses: SERVER_URL="${SERVER_URL:-}"
+    # We replace that with: SERVER_URL="${SERVER_URL:-<actual-base-url>}"
+    content = content.replace(
+        'SERVER_URL="${SERVER_URL:-}"',
+        f'SERVER_URL="${{SERVER_URL:-{base}}}"',
+    )
+    # Normalise line endings to LF — critical for bash on all Linux flavours
+    content = content.replace("\r\n", "\n")
+    return PlainTextResponse(content=content, media_type="text/plain; charset=utf-8")
+
+
+@router.get("/download-linux-agent")
+async def download_linux_agent():
+    """Serve linux_telemetry_agent.py for curl-based installs."""
+    f = Path(__file__).parent.parent.parent / "linux_telemetry_agent.py"
+    if not f.exists():
+        raise HTTPException(status_code=404, detail="linux_telemetry_agent.py not found")
+    return PlainTextResponse(content=f.read_text(encoding="utf-8"),
+                             media_type="text/plain; charset=utf-8")
+
+
+@router.get("/download-linux-ui")
+async def download_linux_ui():
+    """Serve linux_telemetry_ui.py for curl-based installs."""
+    f = Path(__file__).parent.parent.parent / "linux_telemetry_ui.py"
+    if not f.exists():
+        raise HTTPException(status_code=404, detail="linux_telemetry_ui.py not found")
+    return PlainTextResponse(content=f.read_text(encoding="utf-8"),
+                             media_type="text/plain; charset=utf-8")
+
+
+@router.get("/download-linux-bundle")
+async def download_linux_bundle():
+    """Serve linux-telemetry-agent.zip — the pre-built script bundle for manual installs."""
+    root = Path(__file__).parent.parent.parent
+    # Prefer the pre-built zip from dist/
+    zp = root / "dist" / "linux-telemetry-agent.zip"
+    if zp.exists():
+        return FileResponse(str(zp), media_type="application/zip",
+                            filename="linux-telemetry-agent.zip")
+    raise HTTPException(
+        status_code=404,
+        detail="Linux bundle not built yet. Run: .\\build-all.ps1 -SkipWindows",
+    )
 
 
 @router.get("/uninstall-script")
@@ -152,7 +218,7 @@ async def uninstall_script(request: Request):
     """PowerShell uninstall script."""
     base = _public_base(request)
     script = f"""\
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'SilentlyContinue'
 $ServerUrl = '{base}'
 
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {{
@@ -172,30 +238,30 @@ Write-Host "[1/3] Stopping agent..." -ForegroundColor Cyan
 if (Test-Path $AgentExe) {{ & $AgentExe --uninstall; Start-Sleep -Seconds 3 }}
 schtasks /delete /tn TelemetryAgent         /f 2>$null
 schtasks /delete /tn TelemetryAgentWatchdog /f 2>$null
-Stop-Process -Name telemetry_agent -Force -ErrorAction SilentlyContinue
-Write-Host "    Done" -ForegroundColor Green
+Stop-Process -Name telemetry_agent -Force
+Write-Host "      Done" -ForegroundColor Green
 
-Write-Host "[2/3] Stopping UI companion..." -ForegroundColor Cyan
+Write-Host "[2/3] Removing UI companion..." -ForegroundColor Cyan
 schtasks /delete /tn TelemetryUI /f 2>$null
-Stop-Process -Name telemetry_ui -Force -ErrorAction SilentlyContinue
+Stop-Process -Name telemetry_ui -Force
 Start-Sleep -Seconds 2
-Write-Host "    Done" -ForegroundColor Green
+Write-Host "      Done" -ForegroundColor Green
 
 Write-Host "[3/3] Removing files..." -ForegroundColor Cyan
-Remove-Item -Recurse -Force "C:\\Program Files\\TelemetryAgent"  -ErrorAction SilentlyContinue
-Remove-Item -Recurse -Force "C:\\ProgramData\\TelemetryAgent"    -ErrorAction SilentlyContinue
-Remove-Item -Recurse -Force "C:\\Program Files\\TelemetryUI"     -ErrorAction SilentlyContinue
-Remove-Item -Recurse -Force "$env:APPDATA\\TelemetryUI"          -ErrorAction SilentlyContinue
-Remove-Item -Recurse -Force "$env:LOCALAPPDATA\\TelemetryUI"     -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force "C:\\Program Files\\TelemetryAgent"
+Remove-Item -Recurse -Force "C:\\ProgramData\\TelemetryAgent"
+Remove-Item -Recurse -Force "C:\\Program Files\\TelemetryUI"
+Remove-Item -Recurse -Force "$env:APPDATA\\TelemetryUI"
+Remove-Item -Recurse -Force "$env:LOCALAPPDATA\\TelemetryUI"
 $tmp = [System.IO.Path]::GetTempPath()
-Remove-Item -Recurse -Force ($tmp + "TelemetryAgent")            -ErrorAction SilentlyContinue
-Remove-Item -Recurse -Force ($tmp + "telemetry_backup")          -ErrorAction SilentlyContinue
-Write-Host "    Done" -ForegroundColor Green
+Remove-Item -Recurse -Force ($tmp + "TelemetryAgent")
+Remove-Item -Recurse -Force ($tmp + "telemetry_backup")
+Write-Host "      Done" -ForegroundColor Green
 
 Write-Host ""
-Write-Host "==================================================" -ForegroundColor Cyan
+Write-Host "=====================================================" -ForegroundColor Cyan
 Write-Host " Uninstall complete!" -ForegroundColor Green
-Write-Host "==================================================" -ForegroundColor Cyan
+Write-Host "=====================================================" -ForegroundColor Cyan
 Write-Host " Agent data in the cloud is not affected."
 Write-Host ""
 Read-Host "Press Enter to close"

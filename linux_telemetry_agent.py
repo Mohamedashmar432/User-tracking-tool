@@ -1,0 +1,1008 @@
+"""
+linux_telemetry_agent.py — Linux background agent.
+
+Mirrors telemetry_agent.py (Windows) exactly in behavior and payload schema.
+
+Activity detection
+------------------
+- Idle       : xprintidle (ms since last X11 input); Wayland D-Bus fallback
+- Active win : xdotool getactivewindow + getwindowname + getwindowclassname
+- Lock       : D-Bus org.gnome.ScreenSaver / org.freedesktop.ScreenSaver + loginctl
+- Suspend    : wall-clock jump detection (same technique as Windows)
+
+Startup layers (mirrors Windows 3-layer strategy)
+1. systemd user service  (WantedBy=graphical-session.target)
+2. systemd watchdog timer (every 5 min)
+3. XDG autostart .desktop  (fallback)
+
+Offline backup: SQLite backup.db  (replaces Windows batch_*.json files)
+
+IPC with UI companion:
+  ~/.local/share/telemetry-agent/status.json  — updated every tick  (~5 s)
+  ~/.local/share/telemetry-agent/cache.json   — updated every event (~30 s)
+"""
+
+import argparse
+import getpass
+import json
+import logging
+import os
+import platform
+import re
+import shutil
+import signal
+import sqlite3
+import subprocess
+import sys
+import time
+from datetime import datetime, timezone
+
+try:
+    import fcntl
+    _HAS_FCNTL = True
+except ImportError:
+    _HAS_FCNTL = False  # non-Linux (testing / CI)
+
+import requests
+
+# ── XDG paths ────────────────────────────────────────────────────────────────────
+_XDG_DATA   = os.environ.get("XDG_DATA_HOME",   os.path.expanduser("~/.local/share"))
+_XDG_CONFIG = os.environ.get("XDG_CONFIG_HOME",  os.path.expanduser("~/.config"))
+
+DATA_DIR           = os.path.join(_XDG_DATA,   "telemetry-agent")
+CONFIG_DIR         = os.path.join(_XDG_CONFIG,  "telemetry-agent")  # kept for cleanup only
+SYSTEM_CONFIG_PATH = "/etc/telemetry-agent/config.json"
+# config.json lives in DATA_DIR (mirrors Windows C:\ProgramData\TelemetryAgent\config.json)
+# This avoids ~/.config permission issues on minimal/enterprise Linux setups.
+USER_CONFIG_PATH   = os.path.join(DATA_DIR,    "config.json")
+STATUS_PATH        = os.path.join(DATA_DIR,    "status.json")
+CACHE_PATH         = os.path.join(DATA_DIR,    "cache.json")
+BACKUP_DB_PATH     = os.path.join(DATA_DIR,    "backup.db")
+LOG_PATH           = os.path.join(DATA_DIR,    "agent.log")
+LAST_SEEN_PATH     = os.path.join(DATA_DIR,    "last_seen.json")
+PID_FILE           = os.path.join(DATA_DIR,    "agent.pid")
+
+AUTOSTART_DIR    = os.path.join(_XDG_CONFIG, "autostart")
+SYSTEMD_USER_DIR = os.path.join(_XDG_CONFIG, "systemd", "user")
+
+# ── Config loading ────────────────────────────────────────────────────────────────
+def _load_config() -> dict:
+    candidates = [
+        SYSTEM_CONFIG_PATH,
+        USER_CONFIG_PATH,
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent.config.json"),
+    ]
+    for path in candidates:
+        try:
+            with open(path) as f:
+                cfg = json.load(f)
+                print(f"[config] Loaded {path}")
+                return cfg
+        except FileNotFoundError:
+            continue
+        except json.JSONDecodeError as e:
+            print(f"[config] {path} parse error: {e} — skipping")
+    return {}
+
+_cfg = _load_config()
+
+# ── Configuration ─────────────────────────────────────────────────────────────────
+AGENT_VERSION  = "3.0"
+
+IDLE_THRESHOLD = _cfg.get("idle_threshold",  300)
+TICK_INTERVAL  = _cfg.get("tick_interval",     5)
+LOG_INTERVAL   = _cfg.get("log_interval",     30)
+BATCH_SIZE     = _cfg.get("batch_size",       10)
+FLUSH_INTERVAL = _cfg.get("flush_interval",   60)
+MAX_BACKUP_EVENTS = 500
+MAX_LOG_SIZE   = 10 * 1024 * 1024  # 10 MB
+
+INGEST_URL    = os.getenv("INGEST_URL") or _cfg.get("ingest_url", "http://localhost:8000/ingest")
+AGENT_API_KEY = (os.getenv("AGENT_API_KEY") or os.getenv("API_KEY")
+                 or _cfg.get("api_key", ""))
+
+BROWSER_PROCESSES = {
+    "firefox", "firefox-esr", "firefox-bin",
+    "chrome", "google-chrome", "google-chrome-stable",
+    "chromium", "chromium-browser",
+    "brave", "brave-browser",
+    "opera", "vivaldi",
+}
+
+# ── Display server detection ──────────────────────────────────────────────────────
+_IS_WAYLAND = bool(os.environ.get("WAYLAND_DISPLAY"))
+
+# ── Local categorisation (mirrors aggregator.py) ──────────────────────────────────
+_UNPRODUCTIVE_DOMAINS = {
+    "youtube.com", "youtu.be", "netflix.com", "primevideo.com", "hulu.com",
+    "disneyplus.com", "twitch.tv", "instagram.com", "facebook.com",
+    "twitter.com", "x.com", "tiktok.com", "reddit.com", "9gag.com",
+    "amazon.com", "ebay.com", "buzzfeed.com", "espn.com",
+    "web.whatsapp.com", "web.telegram.org",
+}
+_UNPRODUCTIVE_APPS = {
+    "steam", "steam.exe", "epicgameslauncher", "spotify", "vlc", "wine",
+    "leagueclient", "valorant",
+}
+
+
+def _local_categorize(app: str, domain: str) -> str:
+    d = (domain or "").lower().strip()
+    if d.startswith("www."):
+        d = d[4:]
+    if d and any(k in d for k in _UNPRODUCTIVE_DOMAINS):
+        return "Unproductive"
+    a = (app or "").lower().strip()
+    if any(k in a for k in _UNPRODUCTIVE_APPS):
+        return "Unproductive"
+    return "Productive"
+
+
+# ── In-memory daily accumulators ─────────────────────────────────────────────────
+_acc_date:       str  = ""
+_acc_active:     int  = 0
+_acc_idle:       int  = 0
+_acc_locked:     int  = 0
+_acc_productive: int  = 0
+_acc_app_times:  dict = {}
+_acc_hourly:     list = [0] * 24
+
+
+def _check_day_reset() -> None:
+    global _acc_date, _acc_active, _acc_idle, _acc_locked
+    global _acc_productive, _acc_app_times, _acc_hourly
+    today = datetime.now(timezone.utc).date().isoformat()
+    if _acc_date == today:
+        return
+    _acc_date = today
+    _acc_active = _acc_idle = _acc_locked = _acc_productive = 0
+    _acc_app_times = {}
+    _acc_hourly = [0] * 24
+
+
+def _accumulate(app: str, domain: str,
+                is_active: bool, is_locked: bool, duration: int) -> None:
+    global _acc_active, _acc_idle, _acc_locked, _acc_productive
+    _check_day_reset()
+    if is_locked:
+        _acc_locked += duration
+    elif is_active:
+        _acc_active += duration
+        _acc_app_times[app] = _acc_app_times.get(app, 0) + duration
+        hour = datetime.now(timezone.utc).astimezone().hour
+        _acc_hourly[hour] = min(_acc_hourly[hour] + duration, 3600)
+        if _local_categorize(app, domain) == "Productive":
+            _acc_productive += duration
+    else:
+        _acc_idle += duration
+
+
+# ── Status + cache writers ────────────────────────────────────────────────────────
+def _write_status_file(app: str, active: bool, locked: bool, idle_secs: int) -> None:
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        payload = {
+            "timestamp":    datetime.now(timezone.utc).isoformat(),
+            "app":          app,
+            "active":       active,
+            "locked":       locked,
+            "idle_seconds": idle_secs,
+        }
+        tmp = STATUS_PATH + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(payload, f)
+        os.replace(tmp, STATUS_PATH)
+    except Exception:
+        pass
+
+
+def _write_cache(username: str, device: str) -> None:
+    _check_day_reset()
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        total_scored = _acc_active if _acc_active else 1
+        score = round(_acc_productive / total_scored * 100, 1)
+        top_apps = sorted(
+            [{"app": a, "time": t, "category": _local_categorize(a, "")}
+             for a, t in _acc_app_times.items()],
+            key=lambda x: x["time"], reverse=True,
+        )[:10]
+        payload = {
+            "date":         _acc_date,
+            "last_updated": datetime.now(timezone.utc).isoformat(),
+            "username":     username,
+            "device":       device,
+            "summary": {
+                "total_active_time":     _acc_active,
+                "total_idle_time":       _acc_idle,
+                "total_screen_off_time": _acc_locked,
+                "productivity_score":    score,
+                "top_app":               top_apps[0]["app"] if top_apps else "None",
+            },
+            "top_apps":      top_apps,
+            "hourly_active": _acc_hourly,
+        }
+        tmp = CACHE_PATH + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(payload, f)
+        os.replace(tmp, CACHE_PATH)
+    except Exception:
+        pass
+
+
+# ── Logging ────────────────────────────────────────────────────────────────────────
+_LOG = logging.getLogger("telemetry_agent")
+
+
+def _setup_logging() -> None:
+    if _LOG.handlers:
+        return
+    _LOG.setLevel(logging.INFO)
+    fmt = logging.Formatter(
+        "%(asctime)s [%(levelname)-8s] %(message)s", "%Y-%m-%d %H:%M:%S"
+    )
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        fh = logging.FileHandler(LOG_PATH)
+        fh.setFormatter(fmt)
+        _LOG.addHandler(fh)
+    except Exception as e:
+        print(f"[log] Cannot create log file: {e}")
+    try:
+        if sys.stdout:
+            ch = logging.StreamHandler(sys.stdout)
+            ch.setFormatter(fmt)
+            _LOG.addHandler(ch)
+    except Exception:
+        pass
+
+
+# ── State tracker ─────────────────────────────────────────────────────────────────
+class TelemetryState:
+    def __init__(self):
+        self.current_app  = "Unknown"
+        self._last_switch = time.time()
+
+    def update(self, app_name: str) -> None:
+        if app_name != self.current_app:
+            self.current_app  = app_name
+            self._last_switch = time.time()
+
+    def session_duration(self) -> int:
+        return int(time.time() - self._last_switch)
+
+
+# ── Subprocess helper ─────────────────────────────────────────────────────────────
+def _run(cmd: list, timeout: float = 1.5) -> str:
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return r.stdout.strip()
+    except Exception:
+        return ""
+
+
+# ── Idle detection ────────────────────────────────────────────────────────────────
+def get_idle_seconds() -> int:
+    """Seconds since last input.  X11 via xprintidle; Wayland via D-Bus."""
+    if not _IS_WAYLAND:
+        out = _run(["xprintidle"])
+        if out.isdigit():
+            return int(out) // 1000
+    return _get_idle_wayland()
+
+
+def _get_idle_wayland() -> int:
+    """Try GNOME Mutter IdleMonitor then KDE KIdleTime."""
+    out = _run([
+        "dbus-send", "--session", "--print-reply",
+        "--dest=org.gnome.Mutter.IdleMonitor",
+        "/org/gnome/Mutter/IdleMonitor/Core",
+        "org.gnome.Mutter.IdleMonitor.GetIdletime",
+    ], timeout=2.0)
+    m = re.search(r"uint64\s+(\d+)", out)
+    if m:
+        return int(m.group(1)) // 1000
+
+    out = _run([
+        "dbus-send", "--session", "--print-reply",
+        "--dest=org.kde.KIdleTime",
+        "/modules/kidletime",
+        "org.kde.KIdleTime.GetIdleTime",
+    ], timeout=2.0)
+    m = re.search(r"int32\s+(\d+)", out)
+    if m:
+        return int(m.group(1)) // 1000
+
+    return 0
+
+
+# ── Lock detection ────────────────────────────────────────────────────────────────
+def is_session_locked() -> bool:
+    """Returns True when the screen is locked.  Tries D-Bus then loginctl."""
+    for dest, path in [
+        ("org.gnome.ScreenSaver",       "/org/gnome/ScreenSaver"),
+        ("org.freedesktop.ScreenSaver", "/org/freedesktop/ScreenSaver"),
+        ("org.kde.screensaver",         "/org/kde/screensaver"),
+    ]:
+        out = _run([
+            "dbus-send", "--session", "--print-reply",
+            f"--dest={dest}", path, f"{dest}.GetActive",
+        ])
+        if "true" in out.lower():
+            return True
+        if "false" in out.lower():
+            return False  # explicit false → unlocked, stop trying
+
+    session = os.environ.get("XDG_SESSION_ID", "")
+    if session:
+        out = _run(["loginctl", "show-session", session, "--value", "-p", "LockedHint"])
+        if out.lower() == "yes":
+            return True
+
+    return False
+
+
+# ── Active window ─────────────────────────────────────────────────────────────────
+def get_active_window() -> tuple:
+    """Returns (app_name, window_title).  app_name is the WM_CLASS instance."""
+    win_id = _run(["xdotool", "getactivewindow"])
+    if not win_id:
+        return "Unknown", ""
+    title    = _run(["xdotool", "getwindowname", win_id])
+    wm_class = _run(["xdotool", "getwindowclassname", win_id])
+    app = wm_class if wm_class else (title.split()[-1] if title else "Unknown")
+    return app, title
+
+
+def extract_domain(app: str, title: str) -> str:
+    """Best-effort browser title → domain/page-title extraction."""
+    if app.lower() not in BROWSER_PROCESSES:
+        return ""
+    return re.sub(
+        r"\s*[-–—]\s*(Mozilla Firefox|Google Chrome|Chromium|Brave|"
+        r"Opera|Vivaldi|Microsoft Edge).*$",
+        "", title, flags=re.IGNORECASE,
+    ).strip()
+
+
+# ── Singleton guard (PID file + fcntl) ────────────────────────────────────────────
+_pid_fd = None  # kept open for process lifetime
+
+
+def _acquire_singleton() -> bool:
+    global _pid_fd
+    if not _HAS_FCNTL:
+        return True  # non-Linux: always allow (used in tests / CI)
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        _pid_fd = open(PID_FILE, "w")
+        fcntl.lockf(_pid_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _pid_fd.write(str(os.getpid()))
+        _pid_fd.flush()
+        return True
+    except OSError:
+        return False
+
+
+# ── SQLite offline backup ─────────────────────────────────────────────────────────
+def _db_conn() -> sqlite3.Connection:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    conn = sqlite3.connect(BACKUP_DB_PATH, timeout=5)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS offline_batches (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at  TEXT    NOT NULL,
+            user        TEXT    NOT NULL,
+            device      TEXT    NOT NULL,
+            events_json TEXT    NOT NULL,
+            event_count INTEGER NOT NULL
+        )
+    """)
+    conn.commit()
+    return conn
+
+
+def save_to_backup(username: str, device: str, events: list) -> None:
+    if not events:
+        return
+    try:
+        conn = _db_conn()
+        rows = conn.execute(
+            "SELECT id, event_count FROM offline_batches ORDER BY id ASC"
+        ).fetchall()
+        total = sum(r[1] for r in rows)
+        for row_id, count in rows:
+            if total + len(events) <= MAX_BACKUP_EVENTS:
+                break
+            conn.execute("DELETE FROM offline_batches WHERE id=?", (row_id,))
+            total -= count
+            print(f"  [backup] Evicted batch id={row_id}")
+        conn.execute(
+            "INSERT INTO offline_batches "
+            "(created_at, user, device, events_json, event_count) VALUES (?,?,?,?,?)",
+            (datetime.now(timezone.utc).isoformat(),
+             username, device, json.dumps(events), len(events)),
+        )
+        conn.commit()
+        conn.close()
+        print(f"  [backup] {len(events)} events saved offline -> {BACKUP_DB_PATH}")
+    except Exception as e:
+        print(f"  [backup] DB write failed: {e}")
+
+
+def flush_backup(username: str, device: str) -> int:
+    recovered = 0
+    try:
+        conn = _db_conn()
+        rows = conn.execute(
+            "SELECT id, user, device, events_json FROM offline_batches ORDER BY id ASC"
+        ).fetchall()
+        if not rows:
+            conn.close()
+            return 0
+        for row_id, u, d, evts_json in rows:
+            events = json.loads(evts_json)
+            if flush_batch(u or username, d or device, events):
+                conn.execute("DELETE FROM offline_batches WHERE id=?", (row_id,))
+                conn.commit()
+                recovered += len(events)
+                print(f"  [backup] Recovered {len(events)} events (id={row_id})")
+            else:
+                break
+        conn.close()
+    except Exception as e:
+        print(f"  [backup] DB replay failed: {e}")
+    if recovered:
+        print(f"  [backup] Total recovered: {recovered} events")
+    return recovered
+
+
+# ── Last-seen state (startup gap detection) ───────────────────────────────────────
+def _save_last_seen(timestamp: str, app: str) -> None:
+    try:
+        with open(LAST_SEEN_PATH, "w") as f:
+            json.dump({"timestamp": timestamp, "app": app}, f)
+    except Exception:
+        pass
+
+
+def _startup_gap_events() -> list:
+    try:
+        with open(LAST_SEEN_PATH) as f:
+            data = json.load(f)
+        last_ts = datetime.fromisoformat(data["timestamp"])
+        if last_ts.tzinfo is None:
+            last_ts = last_ts.replace(tzinfo=timezone.utc)
+        gap = int((datetime.now(timezone.utc) - last_ts).total_seconds())
+        if gap < LOG_INTERVAL * 2:
+            return []
+        _LOG.info("Startup gap: %ds since last event — inserting screen-off", gap)
+        return [{
+            "app": "Screen Off", "domain": "", "active": False, "locked": True,
+            "duration": gap, "timestamp": data["timestamp"],
+        }]
+    except (FileNotFoundError, KeyError, ValueError):
+        return []
+    except Exception as e:
+        _LOG.warning("Startup gap check failed: %s", e)
+        return []
+
+
+# ── Agent-side aggregation ────────────────────────────────────────────────────────
+def aggregate_events(events: list) -> list:
+    if not events:
+        return []
+    merged = []
+    cur = dict(events[0])
+    for evt in events[1:]:
+        same = (
+            evt["app"]               == cur["app"] and
+            evt["active"]            == cur["active"] and
+            evt.get("locked", False) == cur.get("locked", False)
+        )
+        if same:
+            cur["duration"] += evt.get("duration", 0)
+            if evt.get("domain"):
+                cur["domain"] = evt["domain"]
+        else:
+            merged.append(cur)
+            cur = dict(evt)
+    merged.append(cur)
+    return merged
+
+
+# ── Batch flush ───────────────────────────────────────────────────────────────────
+def flush_batch(user: str, device: str, batch: list) -> bool:
+    if not batch:
+        return True
+    try:
+        resp = requests.post(
+            INGEST_URL,
+            json={"user": user, "device": device, "events": batch},
+            headers={"X-API-Key": AGENT_API_KEY},
+            timeout=10,
+            verify=True,
+        )
+        if resp.status_code in (200, 202):
+            data = resp.json()
+            print(f"  ->Batch sent: {data.get('accepted')}/{data.get('total')} events")
+            return True
+        print(f"  ->Server rejected [{resp.status_code}]: {resp.text[:200]}")
+        return False
+    except requests.exceptions.ConnectionError:
+        print(f"  ->Unreachable ({INGEST_URL}). Buffering locally.")
+        return False
+    except Exception as e:
+        print(f"  ->Flush error: {e}")
+        return False
+
+
+# ── Connection check + auto-update ───────────────────────────────────────────────
+def _base_url() -> str:
+    return (INGEST_URL.rsplit("/ingest", 1)[0]
+            if "/ingest" in INGEST_URL else INGEST_URL.rsplit("/", 1)[0])
+
+
+def _ver(v: str) -> tuple:
+    """'1.10' -> (1, 10) for correct numeric comparison."""
+    try:
+        return tuple(int(x) for x in v.strip().split("."))
+    except Exception:
+        return (0,)
+
+
+def _do_update(download_url: str) -> None:
+    """
+    Download new linux_telemetry_agent.py, replace this file atomically,
+    then re-exec so the new version takes over this process slot.
+
+    Strategy
+    --------
+    1. Download to <script>.new  — keeps the running script intact on failure.
+    2. Sanity-check size         — reject suspiciously small payloads.
+    3. os.replace()              — atomic rename; never leaves a half-written file.
+    4. os.execv()                — replace this process image in-place; PID stays
+                                   the same so systemd keeps tracking it correctly.
+    """
+    current = os.path.abspath(__file__)
+    tmp     = current + ".new"
+
+    _LOG.info("Auto-update: downloading from %s", download_url)
+    try:
+        with requests.get(download_url, timeout=60, verify=True) as r:
+            r.raise_for_status()
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(r.text)
+    except Exception as e:
+        _LOG.error("Auto-update: download failed -- %s", e)
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return
+
+    if os.path.getsize(tmp) < 1024:
+        _LOG.error("Auto-update: downloaded file too small, aborting")
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return
+
+    # Preserve executable permission bits from the current script
+    try:
+        import stat as _stat
+        mode = os.stat(current).st_mode | _stat.S_IEXEC | _stat.S_IXGRP | _stat.S_IXOTH
+        os.chmod(tmp, mode)
+    except Exception:
+        pass
+
+    # Atomic replace (POSIX rename semantics -- safe on Linux)
+    try:
+        os.replace(tmp, current)
+    except Exception as e:
+        _LOG.error("Auto-update: could not replace script -- %s", e)
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return
+
+    _LOG.info("Auto-update: script replaced -- restarting via execv")
+
+    # Re-exec: replace this process image with the updated script.
+    # os.execv() never returns on success; on failure we log and continue
+    # running the old in-memory bytecode until the next restart.
+    try:
+        os.execv(sys.executable, [sys.executable, current] + sys.argv[1:])
+    except Exception as e:
+        _LOG.error("Auto-update: re-exec failed -- %s  (restart manually)", e)
+
+
+def check_for_update() -> None:
+    """
+    Called once at startup.  Queries /api/health; if the server reports a
+    newer version, downloads and self-replaces via _do_update().
+    Skips silently on any network error.
+    """
+    base       = _base_url()
+    health_url = f"{base}/api/health"
+
+    try:
+        resp = requests.get(health_url, timeout=10, verify=True)
+        if not resp.ok:
+            return
+        data           = resp.json()
+        server_version = data.get("version", "0")
+        download_url   = data.get(
+            "linux_agent_download_url",
+            f"{base}/download-linux-agent",
+        )
+    except Exception as e:
+        _LOG.debug("Auto-update check skipped: %s", e)
+        return
+
+    if _ver(server_version) <= _ver(AGENT_VERSION):
+        _LOG.info("Auto-update: up to date (v%s)", AGENT_VERSION)
+        return
+
+    _LOG.info(
+        "Auto-update: server has v%s, running v%s -- updating",
+        server_version, AGENT_VERSION,
+    )
+    _do_update(download_url)
+
+
+def check_connection(retries: int = 3, delay: int = 5, base_url: str = None) -> bool:
+    health_url = (base_url or _base_url()) + "/api/health"
+    for attempt in range(1, retries + 1):
+        try:
+            r = requests.get(health_url, timeout=10, verify=True)
+            if r.status_code == 200:
+                _LOG.info("Connected to server (%s)", health_url)
+                return True
+            _LOG.warning("Health check %d/%d — HTTP %d", attempt, retries, r.status_code)
+        except Exception as e:
+            _LOG.warning("Health check %d/%d — %s", attempt, retries, e)
+        if attempt < retries:
+            time.sleep(delay)
+    _LOG.error("Failed to connect after %d attempts (%s)", retries, health_url)
+    return False
+
+
+# ── Log rotation ──────────────────────────────────────────────────────────────────
+def rotate_logs() -> None:
+    try:
+        if os.path.exists(LOG_PATH) and os.path.getsize(LOG_PATH) > MAX_LOG_SIZE:
+            old = LOG_PATH + ".old"
+            if os.path.exists(old):
+                os.remove(old)
+            os.rename(LOG_PATH, old)
+    except Exception:
+        pass
+
+
+# ── systemctl helper ──────────────────────────────────────────────────────────────
+def _systemctl(*args) -> None:
+    try:
+        subprocess.run(["systemctl", "--user"] + list(args),
+                       capture_output=True, timeout=10)
+    except Exception as e:
+        _LOG.warning("systemctl %s: %s", " ".join(args), e)
+
+
+# ── Unit file templates ───────────────────────────────────────────────────────────
+_AGENT_SERVICE = """\
+[Unit]
+Description=Telemetry Agent
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart={exec_path}
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=10
+
+[Install]
+WantedBy=graphical-session.target
+"""
+
+_WATCHDOG_SERVICE = """\
+[Unit]
+Description=Telemetry Agent Watchdog (one-shot restart)
+After=graphical-session.target
+
+[Service]
+Type=oneshot
+ExecStart={exec_path}
+"""
+
+_WATCHDOG_TIMER = """\
+[Unit]
+Description=Telemetry Agent Watchdog Timer
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Unit=telemetry-agent-watchdog.service
+
+[Install]
+WantedBy=timers.target
+"""
+
+_AGENT_DESKTOP = """\
+[Desktop Entry]
+Type=Application
+Name=TelemetryAgent
+Exec={exec_path}
+Hidden=false
+NoDisplay=false
+X-GNOME-Autostart-enabled=true
+Comment=User activity telemetry agent (background)
+"""
+
+
+# ── Install / Uninstall ───────────────────────────────────────────────────────────
+def install(server_url: str = None, admin_key: str = None) -> None:
+    _LOG.info("=== Telemetry Agent Installation (Linux) ===")
+
+    os.makedirs(DATA_DIR, exist_ok=True)
+    _LOG.info("  Directory ready: %s", DATA_DIR)
+
+    base      = (server_url or _base_url()).rstrip("/")
+    agent_key = ""
+    try:
+        resp = requests.get(f"{base}/agent-config", timeout=10, verify=True)
+        if resp.ok:
+            cfg     = resp.json()
+            fetched = cfg.get("server_url", "").rstrip("/")
+            if fetched:
+                base = fetched
+            agent_key = cfg.get("agent_api_key", "")
+            if agent_key:
+                _LOG.info("  Agent API key received from /agent-config")
+    except Exception as e:
+        _LOG.warning("  Could not fetch /agent-config: %s", e)
+
+    username = getpass.getuser()
+    if admin_key:
+        try:
+            resp = requests.post(
+                f"{base}/api/register-device",
+                json={"username": username},
+                headers={"X-API-Key": admin_key},
+                timeout=10,
+            )
+            if resp.ok:
+                per_user_key = resp.json().get("agent_key", "")
+                if per_user_key:
+                    agent_key = per_user_key
+                    _LOG.info("  Device registered — per-user key issued")
+        except Exception as e:
+            _LOG.warning("  Device registration failed: %s", e)
+
+    config = {
+        "ingest_url":     f"{base}/ingest",
+        "api_key":        agent_key,
+        "idle_threshold": IDLE_THRESHOLD,
+        "tick_interval":  TICK_INTERVAL,
+        "log_interval":   LOG_INTERVAL,
+        "batch_size":     BATCH_SIZE,
+    }
+    # config.json goes in DATA_DIR — no ~/.config needed, avoids permission issues
+    with open(USER_CONFIG_PATH, "w") as f:
+        json.dump(config, f, indent=4)
+    _LOG.info("  Config written: %s", USER_CONFIG_PATH)
+
+    exec_path = os.path.abspath(sys.argv[0])
+
+    # systemd user units — under ~/.config/systemd/user/
+    try:
+        os.makedirs(SYSTEMD_USER_DIR, exist_ok=True)
+        with open(os.path.join(SYSTEMD_USER_DIR, "telemetry-agent.service"), "w") as f:
+            f.write(_AGENT_SERVICE.format(exec_path=exec_path))
+        with open(os.path.join(SYSTEMD_USER_DIR, "telemetry-agent-watchdog.service"), "w") as f:
+            f.write(_WATCHDOG_SERVICE.format(exec_path=exec_path))
+        with open(os.path.join(SYSTEMD_USER_DIR, "telemetry-agent-watchdog.timer"), "w") as f:
+            f.write(_WATCHDOG_TIMER)
+        _systemctl("daemon-reload")
+        _systemctl("enable", "--now", "telemetry-agent.service")
+        _systemctl("enable", "--now", "telemetry-agent-watchdog.timer")
+        _LOG.info("  systemd user units enabled")
+    except PermissionError as e:
+        _LOG.warning("  Could not write systemd units to %s: %s", SYSTEMD_USER_DIR, e)
+        _LOG.warning("  Agent will not auto-start via systemd — falling back to XDG autostart only")
+
+    # XDG autostart — under ~/.config/autostart/
+    try:
+        os.makedirs(AUTOSTART_DIR, exist_ok=True)
+        with open(os.path.join(AUTOSTART_DIR, "telemetry-agent.desktop"), "w") as f:
+            f.write(_AGENT_DESKTOP.format(exec_path=exec_path))
+        _LOG.info("  XDG autostart entry written")
+    except PermissionError as e:
+        _LOG.warning("  Could not write XDG autostart to %s: %s", AUTOSTART_DIR, e)
+        _LOG.warning("  Add '%s' to your session startup manually", exec_path)
+
+    if check_connection(base_url=base):
+        _LOG.info("  Server connection: OK")
+    else:
+        _LOG.warning("  Server connection: FAILED — will retry at runtime")
+
+    _LOG.info("=== Installation complete ===")
+    _LOG.info("  Config  : %s", USER_CONFIG_PATH)
+    _LOG.info("  Log     : %s", LOG_PATH)
+    _LOG.info("  Data    : %s", DATA_DIR)
+
+
+def uninstall() -> None:
+    _LOG.info("=== Telemetry Agent Uninstall (Linux) ===")
+
+    _systemctl("disable", "--now", "telemetry-agent.service")
+    _systemctl("disable", "--now", "telemetry-agent-watchdog.timer")
+    _systemctl("daemon-reload")
+
+    for fname in (
+        "telemetry-agent.service",
+        "telemetry-agent-watchdog.service",
+        "telemetry-agent-watchdog.timer",
+    ):
+        try:
+            os.remove(os.path.join(SYSTEMD_USER_DIR, fname))
+        except FileNotFoundError:
+            pass
+
+    try:
+        os.remove(os.path.join(AUTOSTART_DIR, "telemetry-agent.desktop"))
+    except FileNotFoundError:
+        pass
+
+    for path in [DATA_DIR, CONFIG_DIR]:
+        shutil.rmtree(path, ignore_errors=True)
+        _LOG.info("  Removed: %s", path)
+
+    _LOG.info("=== Uninstall complete — cloud data not affected ===")
+
+
+# ── Main loop ─────────────────────────────────────────────────────────────────────
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Linux Telemetry Agent")
+    parser.add_argument("--install",    action="store_true")
+    parser.add_argument("--uninstall",  action="store_true")
+    parser.add_argument("--server-url", default=None)
+    parser.add_argument("--admin-key",  default=None)
+    args = parser.parse_args()
+
+    _setup_logging()
+
+    if args.install:
+        install(server_url=args.server_url, admin_key=args.admin_key)
+        return
+    if args.uninstall:
+        uninstall()
+        return
+
+    if not _acquire_singleton():
+        sys.exit(0)
+
+    # Auto-update check: downloads + re-execs if server has a newer version.
+    # Must run AFTER singleton guard so only one instance checks for updates.
+    check_for_update()
+
+    username = getpass.getuser()
+    hostname = platform.node()
+    state    = TelemetryState()
+
+    event_buffer:        list = []
+    elapsed_since_log:   int  = 0
+    elapsed_since_flush: int  = 0
+    last_event_app:      str  = None
+
+    _LOG.info("Agent v%s started — %s @ %s", AGENT_VERSION, username, hostname)
+    _LOG.info(
+        "Display: %s | Tick: %ds | Event: %ds | Flush: %ds | URL: %s",
+        "Wayland" if _IS_WAYLAND else "X11",
+        TICK_INTERVAL, LOG_INTERVAL, FLUSH_INTERVAL, INGEST_URL,
+    )
+
+    if not check_connection(retries=3, delay=5):
+        _LOG.warning("Startup connection check failed — will retry on each batch")
+
+    flush_backup(username, hostname)
+
+    gap_events = _startup_gap_events()
+    if gap_events:
+        if not flush_batch(username, hostname, gap_events):
+            save_to_backup(username, hostname, gap_events)
+
+    _last_tick_wall = time.time()
+
+    def _shutdown(sig, _frame):
+        _LOG.info("Signal %d received — flushing and exiting", sig)
+        if event_buffer:
+            compressed = aggregate_events(event_buffer)
+            if not flush_batch(username, hostname, compressed):
+                save_to_backup(username, hostname, compressed)
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _shutdown)
+    signal.signal(signal.SIGINT,  _shutdown)
+
+    try:
+        while True:
+            # ── Sleep/resume gap detection (same logic as Windows agent) ──────────
+            _now_wall   = time.time()
+            _tick_delta = _now_wall - _last_tick_wall
+            _last_tick_wall = _now_wall
+            if _tick_delta > TICK_INTERVAL * 3:
+                gap_start = datetime.fromtimestamp(
+                    _now_wall - _tick_delta, tz=timezone.utc
+                ).isoformat()
+                event_buffer.append({
+                    "app": "Screen Off", "domain": "", "active": False, "locked": True,
+                    "duration": int(_tick_delta), "timestamp": gap_start,
+                })
+                elapsed_since_flush += int(_tick_delta)
+                _LOG.info("Sleep/resume gap: %ds captured", int(_tick_delta))
+
+            # ── Sample current state ───────────────────────────────────────────────
+            is_locked = is_session_locked()
+            idle_secs = get_idle_seconds()
+            is_active = not is_locked and (idle_secs < IDLE_THRESHOLD)
+            app_name, win_title = get_active_window()
+            domain = extract_domain(app_name, win_title) if not is_locked else ""
+
+            state.update(app_name)
+            elapsed_since_log   += TICK_INTERVAL
+            elapsed_since_flush += TICK_INTERVAL
+
+            _write_status_file(app_name, is_active, is_locked, idle_secs)
+
+            # ── Every LOG_INTERVAL: build one raw event ────────────────────────────
+            if elapsed_since_log >= LOG_INTERVAL:
+                rotate_logs()
+                now = datetime.now(timezone.utc).isoformat()
+
+                event_buffer.append({
+                    "app":       state.current_app,
+                    "domain":    domain,
+                    "active":    is_active,
+                    "locked":    is_locked,
+                    "duration":  LOG_INTERVAL,
+                    "timestamp": now,
+                })
+                _save_last_seen(now, state.current_app)
+                _accumulate(state.current_app, domain, is_active, is_locked, LOG_INTERVAL)
+                _write_cache(username, hostname)
+
+                prev_app       = last_event_app
+                last_event_app = state.current_app
+                app_switched   = prev_app is not None and state.current_app != prev_app
+                time_to_flush  = elapsed_since_flush >= FLUSH_INTERVAL
+                cap_reached    = len(event_buffer) >= BATCH_SIZE
+
+                if (time_to_flush or app_switched or cap_reached) and event_buffer:
+                    compressed = aggregate_events(event_buffer)
+                    if flush_batch(username, hostname, compressed):
+                        event_buffer.clear()
+                        flush_backup(username, hostname)
+                    else:
+                        save_to_backup(username, hostname, compressed)
+                        event_buffer.clear()
+                    elapsed_since_flush = 0
+
+                elapsed_since_log = 0
+
+            time.sleep(TICK_INTERVAL)
+
+    except Exception as e:
+        _LOG.error("Agent crash: %s", e)
+        if event_buffer:
+            compressed = aggregate_events(event_buffer)
+            if not flush_batch(username, hostname, compressed):
+                save_to_backup(username, hostname, compressed)
+
+
+if __name__ == "__main__":
+    main()

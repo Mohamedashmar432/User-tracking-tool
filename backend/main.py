@@ -51,9 +51,11 @@ async def health(request: Request):
         "service":              "telemetry-analytics",
         "version":              APP_VERSION,
         "started_at":           STARTED_AT,
-        "agent_download_url":     f"{base}/download-agent",
-        "agent_zip_download_url": f"{base}/download-agent-zip",
-        "ui_zip_download_url":    f"{base}/download-ui",
+        "agent_download_url":       f"{base}/download-agent",
+        "agent_zip_download_url":   f"{base}/download-agent-zip",
+        "ui_zip_download_url":      f"{base}/download-ui",
+        "linux_agent_download_url": f"{base}/download-linux-agent",
+        "linux_ui_download_url":    f"{base}/download-linux-ui",
     }
 
 
