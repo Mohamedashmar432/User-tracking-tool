@@ -714,6 +714,8 @@ def _startup_gap_events() -> list:
         gap = int((datetime.now(timezone.utc) - last_ts).total_seconds())
         if gap < LOG_INTERVAL * 2:
             return []
+        # Cap at 24 h so one event never inflates a single day beyond 86400 s
+        gap = min(gap, 86_400)
         _LOG.info("Startup gap: %ds since last event — inserting screen-off", gap)
         return [{
             "app": "Screen Off", "domain": "", "active": False, "locked": True,

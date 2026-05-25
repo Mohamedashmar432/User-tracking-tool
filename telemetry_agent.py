@@ -713,11 +713,9 @@ def _startup_gap_events() -> list:
     On agent start, read the last-seen timestamp and return a synthetic
     locked/screen-off event covering any gap since the agent was last running.
 
-    This captures time the machine was asleep or the agent was stopped between
-    sessions — time that would otherwise be silently lost.
-
-    Returns an empty list if there is no last-seen file or the gap is too small
-    to be meaningful (< 2 × LOG_INTERVAL to avoid noise from normal restarts).
+    Cap: a single startup-gap event represents at most 86400 s (24 h).
+    Longer gaps (multi-day shutdowns) are capped so one partition never
+    accumulates more than one day of locked time from a single event.
     """
     try:
         with open(LAST_SEEN_PATH, encoding="utf-8") as f:
@@ -725,22 +723,23 @@ def _startup_gap_events() -> list:
         last_ts_str = data.get("timestamp", "")
         if not last_ts_str:
             return []
-        # Parse — handle both offset-aware and naive ISO strings
         last_ts = datetime.fromisoformat(last_ts_str)
         if last_ts.tzinfo is None:
             last_ts = last_ts.replace(tzinfo=timezone.utc)
         now     = datetime.now(timezone.utc)
         gap_sec = int((now - last_ts).total_seconds())
-        if gap_sec < LOG_INTERVAL * 2:          # < 2 min — noise, skip
+        if gap_sec < LOG_INTERVAL * 2:
             return []
-        _LOG.info("Startup gap: %ds since last event (%s) — inserting screen-off time", gap_sec, last_ts_str)
+        # Cap at 24 h so one event never inflates a single day beyond 86400 s
+        gap_sec = min(gap_sec, 86_400)
+        _LOG.info("Startup gap: %ds since last event — inserting screen-off", gap_sec)
         return [{
             "app":       "Screen Off",
             "domain":    "",
             "active":    False,
             "locked":    True,
             "duration":  gap_sec,
-            "timestamp": last_ts_str,  # gap started when agent last logged
+            "timestamp": last_ts_str,
         }]
     except (FileNotFoundError, KeyError, ValueError):
         return []
