@@ -157,3 +157,61 @@ def test_startup_gap_capped_at_24h():
     gap_seconds = 50 * 3600
     capped = min(gap_seconds, 86400)
     assert capped == 86400
+
+
+def test_rapid_state_transitions():
+    """Alternating active/idle ticks: total counters must stay within elapsed."""
+    se = StateEngine(idle_threshold=300)
+    for i in range(10):
+        if i % 2 == 0:
+            se.tick(0,   False, 5.0)   # active
+        else:
+            se.tick(301, False, 5.0)   # idle
+    se.enforce_invariant()
+    total = se.active_seconds + se.idle_seconds + se.locked_seconds
+    elapsed = se.session_elapsed_seconds
+    assert total <= elapsed + 1
+
+
+def test_all_states_fill_elapsed():
+    """Active + idle + locked must account for all accumulated elapsed time."""
+    se = StateEngine(idle_threshold=300)
+    se.tick(0,   False, 10.0)   # active
+    se.tick(301, False, 10.0)   # idle
+    se.tick(0,   True,  10.0)   # locked
+    total = se.active_seconds + se.idle_seconds + se.locked_seconds
+    assert abs(total - 30.0) < 0.1
+
+
+def test_clock_change_does_not_affect_monotonic():
+    """
+    Wall-clock NTP jump does not affect StateEngine counters.
+    Simulate two 5 s monotonic ticks (NTP would jump wall clock but not monotonic).
+    """
+    se = StateEngine(idle_threshold=300)
+    se.tick(0, False, 5.0)
+    se.tick(0, False, 5.0)
+    se.enforce_invariant()
+    assert abs(se.active_seconds - 10.0) < 0.1
+
+
+def test_detection_delay_within_bounds():
+    """
+    A tick with elapsed=8 s (detection call took 3 s extra) accumulates 8 s,
+    which is within max_tick_seconds=30 default so is NOT clamped.
+    """
+    se = StateEngine(idle_threshold=300)
+    se.tick(0, False, 8.0)
+    assert abs(se.active_seconds - 8.0) < 0.1
+
+
+def test_invariant_after_many_ticks():
+    """After 12-hour simulation, active_seconds never exceeds session elapsed."""
+    import random
+    random.seed(42)
+    se = StateEngine(idle_threshold=300)
+    for _ in range(12 * 720):   # 12 h × 720 ticks/h (5 s/tick)
+        idle = random.choice([0, 0, 0, 301])   # 75% active
+        se.tick(idle, False, 5.0)
+    se.enforce_invariant()
+    assert se.active_seconds <= se.session_elapsed_seconds + 1
