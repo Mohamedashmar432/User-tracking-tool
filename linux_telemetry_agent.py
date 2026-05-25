@@ -36,6 +36,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime, timezone
+from enum import Enum
 
 try:
     import fcntl
@@ -87,7 +88,7 @@ def _load_config() -> dict:
 _cfg = _load_config()
 
 # ── Configuration ─────────────────────────────────────────────────────────────────
-AGENT_VERSION  = "3.0"
+AGENT_VERSION  = "3.1"
 
 IDLE_THRESHOLD = _cfg.get("idle_threshold",  300)
 TICK_INTERVAL  = _cfg.get("tick_interval",     5)
@@ -175,6 +176,103 @@ def _accumulate(app: str, domain: str,
             _acc_productive += duration
     else:
         _acc_idle += duration
+
+
+# ── Activity state machine ────────────────────────────────────────────────────
+class ActivityState(Enum):
+    ACTIVE = "active"
+    IDLE   = "idle"
+    LOCKED = "locked"
+
+
+class StateEngine:
+    """
+    State-machine that tracks ACTIVE / IDLE / LOCKED using
+    time.monotonic() deltas exclusively.  Never uses event durations
+    or constant TICK_INTERVAL additions.
+
+    Invariant: active_seconds + idle_seconds + locked_seconds <= session_elapsed_seconds always.
+    """
+
+    def __init__(self, idle_threshold: int, max_tick_seconds: float = 30.0):
+        self._threshold               = idle_threshold
+        self._max_tick                = max_tick_seconds
+        self._state                   = ActivityState.IDLE
+        self._active_seconds          = 0.0
+        self._idle_seconds            = 0.0
+        self._locked_seconds          = 0.0
+        self._session_elapsed_seconds = 0.0
+
+    def tick(self, idle_secs: int, is_locked: bool, tick_elapsed: float) -> "ActivityState":
+        tick_elapsed = max(0.0, min(tick_elapsed, self._max_tick))
+        self._session_elapsed_seconds += tick_elapsed
+
+        if is_locked:
+            self._state = ActivityState.LOCKED
+            self._locked_seconds += tick_elapsed
+        elif idle_secs >= self._threshold:
+            self._state = ActivityState.IDLE
+            self._idle_seconds += tick_elapsed
+        else:
+            self._state = ActivityState.ACTIVE
+            self._active_seconds += tick_elapsed
+
+        return self._state
+
+    def on_sleep_gap(self, gap_seconds: float) -> None:
+        gap_seconds = max(0.0, gap_seconds)
+        self._locked_seconds += gap_seconds
+        self._session_elapsed_seconds += gap_seconds
+        self._state = ActivityState.LOCKED
+
+    def enforce_invariant(self) -> None:
+        session_el = self._session_elapsed_seconds
+        total = self._active_seconds + self._idle_seconds + self._locked_seconds
+        # 1-second tolerance absorbs sub-second accumulation jitter
+        if total > session_el + 1.0:
+            _LOG.warning(
+                "StateEngine invariant violation: total=%.0fs session=%.0fs — scaling down",
+                total, session_el,
+            )
+            if total > 0:
+                scale = session_el / total
+                self._active_seconds  *= scale
+                self._idle_seconds    *= scale
+                self._locked_seconds  *= scale
+
+    @property
+    def state(self) -> "ActivityState":
+        return self._state
+
+    @property
+    def is_active(self) -> bool:
+        return self._state == ActivityState.ACTIVE
+
+    @property
+    def active_seconds(self) -> float:
+        return self._active_seconds
+
+    @property
+    def idle_seconds(self) -> float:
+        return self._idle_seconds
+
+    @property
+    def locked_seconds(self) -> float:
+        return self._locked_seconds
+
+    @property
+    def session_elapsed_seconds(self) -> float:
+        return self._session_elapsed_seconds
+
+    def to_cache_dict(self) -> dict:
+        snapshot_elapsed = self._session_elapsed_seconds
+        self.enforce_invariant()
+        return {
+            "active_seconds":  int(self._active_seconds),
+            "idle_seconds":    int(self._idle_seconds),
+            "locked_seconds":  int(self._locked_seconds),
+            "session_elapsed": int(snapshot_elapsed),
+        }
 
 
 # ── Status + cache writers ────────────────────────────────────────────────────────
@@ -281,18 +379,78 @@ def _run(cmd: list, timeout: float = 1.5) -> str:
         return ""
 
 
+def _detect_x11_env() -> None:
+    """
+    Systemd user services do not inherit the graphical session environment, so
+    DISPLAY, XAUTHORITY, and DBUS_SESSION_BUS_ADDRESS are typically unset.
+    Without DISPLAY, xdotool and xprop silently fail → every app reports "Unknown".
+
+    This scans /proc/<pid>/environ for processes owned by the current user that
+    have DISPLAY set (i.e. any GUI app already running), and copies those vars
+    into os.environ so all subsequent X11 calls work.
+    """
+    needed = {"DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS"}
+    if all(os.environ.get(k) for k in needed):
+        return  # already fully set
+
+    uid = os.getuid()
+    found: dict = {}
+    try:
+        for entry in os.listdir("/proc"):
+            if not entry.isdigit():
+                continue
+            env_path = f"/proc/{entry}/environ"
+            try:
+                if os.stat(env_path).st_uid != uid:
+                    continue
+                with open(env_path, "rb") as f:
+                    for var in f.read().split(b"\x00"):
+                        try:
+                            s = var.decode()
+                        except UnicodeDecodeError:
+                            continue
+                        k, _, v = s.partition("=")
+                        if k in needed and k not in found and v:
+                            found[k] = v
+                if len(found) == len(needed):
+                    break
+            except (PermissionError, FileNotFoundError, ProcessLookupError):
+                continue
+    except Exception:
+        pass
+
+    for k, v in found.items():
+        os.environ.setdefault(k, v)
+        _LOG.info("[x11-env] Detected %s=%s", k, v)
+
+    if "DISPLAY" not in os.environ:
+        _LOG.warning("[x11-env] Could not detect DISPLAY — window tracking will be unavailable")
+
+
 # ── Idle detection ────────────────────────────────────────────────────────────────
-def get_idle_seconds() -> int:
-    """Seconds since last input.  X11 via xprintidle; Wayland via D-Bus."""
-    if not _IS_WAYLAND:
-        out = _run(["xprintidle"])
-        if out.isdigit():
-            return int(out) // 1000
-    return _get_idle_wayland()
+def _get_idle_x11_xlib() -> int:
+    """
+    Query X11 Screen Saver idle time via python-xlib (ships with pystray).
+    Equivalent to xprintidle without the external binary.
+    Returns idle seconds, or -1 if unavailable.
+    """
+    try:
+        from Xlib import display as _xd
+        from Xlib.ext import screensaver as _xs
+        d = _xd.Display()
+        info = _xs.query_info(d.screen().root)
+        d.close()
+        return info.idle // 1000
+    except Exception:
+        return -1
 
 
-def _get_idle_wayland() -> int:
-    """Try GNOME Mutter IdleMonitor then KDE KIdleTime."""
+def _get_idle_dbus() -> int:
+    """
+    Query idle milliseconds via D-Bus.  Tries GNOME Mutter, then KDE KIdleTime.
+    Returns idle seconds, or -1 when no supported DE is running (e.g. MATE, XFCE).
+    Returning -1 (not 0) distinguishes "unknown" from "just moved mouse".
+    """
     out = _run([
         "dbus-send", "--session", "--print-reply",
         "--dest=org.gnome.Mutter.IdleMonitor",
@@ -313,7 +471,43 @@ def _get_idle_wayland() -> int:
     if m:
         return int(m.group(1)) // 1000
 
-    return 0
+    return -1  # no D-Bus idle provider found
+
+
+def get_idle_seconds() -> int:
+    """
+    Seconds since last user input.  Detection chain (most accurate → safest fallback):
+      1. xprintidle     — external binary, most distros, all X11 DEs
+      2. python-xlib    — Screen Saver extension query; no extra binary needed
+      3. D-Bus          — GNOME Mutter / KDE KIdleTime
+      4. IDLE_THRESHOLD — if ALL methods fail, default to idle (never false-active)
+
+    Re-reads WAYLAND_DISPLAY each call because _detect_x11_env() may set it
+    after module load (the module-level _IS_WAYLAND flag is evaluated too early).
+    """
+    is_wayland = bool(os.environ.get("WAYLAND_DISPLAY"))
+
+    if not is_wayland:
+        # Method 1: xprintidle binary
+        out = _run(["xprintidle"])
+        if out.isdigit():
+            return int(out) // 1000
+
+        # Method 2: python-xlib Screen Saver extension (works on MATE/XFCE/Openbox/etc.)
+        idle = _get_idle_x11_xlib()
+        if idle >= 0:
+            return idle
+
+    # Method 3: D-Bus (Wayland, or X11 without xprintidle/xlib)
+    idle = _get_idle_dbus()
+    if idle >= 0:
+        return idle
+
+    # Method 4: All detection failed.  Return IDLE_THRESHOLD so the user is
+    # treated as IDLE rather than falsely active — wrong idle is less harmful
+    # than wrong active (inflated productivity scores / impossible hour counts).
+    _LOG.debug("Idle detection unavailable — defaulting to idle state")
+    return IDLE_THRESHOLD
 
 
 # ── Lock detection ────────────────────────────────────────────────────────────────
@@ -344,14 +538,58 @@ def is_session_locked() -> bool:
 
 # ── Active window ─────────────────────────────────────────────────────────────────
 def get_active_window() -> tuple:
-    """Returns (app_name, window_title).  app_name is the WM_CLASS instance."""
+    """
+    Returns (app_name, window_title).
+
+    Detection chain (works across Ubuntu, MATE, Xfce, Openbox, KDE, etc.):
+      1. xdotool  — preferred; needs xdotool installed
+      2. xprop    — standard X11 tool present on all distros with x11-utils/xorg-x11-utils
+      3. /proc/<pid>/comm — pure-Python last resort using _NET_WM_PID
+    """
+    # ── Method 1: xdotool ─────────────────────────────────────────────────────
     win_id = _run(["xdotool", "getactivewindow"])
-    if not win_id:
-        return "Unknown", ""
-    title    = _run(["xdotool", "getwindowname", win_id])
-    wm_class = _run(["xdotool", "getwindowclassname", win_id])
-    app = wm_class if wm_class else (title.split()[-1] if title else "Unknown")
-    return app, title
+    if win_id:
+        title    = _run(["xdotool", "getwindowname",    win_id])
+        wm_class = _run(["xdotool", "getwindowclassname", win_id])
+        app = wm_class if wm_class else (title.split()[-1] if title else "Unknown")
+        return app, title
+
+    # ── Method 2: xprop _NET_ACTIVE_WINDOW (EWMH — all modern WMs) ───────────
+    root_out = _run(["xprop", "-root", "_NET_ACTIVE_WINDOW"], timeout=2.0)
+    m = re.search(r"0x([0-9a-fA-F]+)", root_out)
+    if m:
+        win_hex  = "0x" + m.group(1)
+        xp = _run(["xprop", "-id", win_hex,
+                   "_NET_WM_NAME", "WM_NAME", "WM_CLASS", "_NET_WM_PID"], timeout=2.0)
+
+        # Title: prefer _NET_WM_NAME (UTF-8), fall back to WM_NAME
+        title = ""
+        t = re.search(r'_NET_WM_NAME\([^)]+\) = "(.*?)"', xp)
+        if not t:
+            t = re.search(r'WM_NAME\([^)]+\) = "(.*?)"', xp)
+        if t:
+            title = t.group(1)
+
+        # App: first string in WM_CLASS = instance name (e.g. "firefox", "caja", "mate-terminal")
+        app = ""
+        c = re.search(r'WM_CLASS\([^)]+\) = "([^"]+)"', xp)
+        if c:
+            app = c.group(1)
+
+        # Last resort: read process name from /proc via _NET_WM_PID
+        if not app:
+            p = re.search(r'_NET_WM_PID\([^)]+\) = (\d+)', xp)
+            if p:
+                try:
+                    with open(f"/proc/{p.group(1)}/comm") as f:
+                        app = f.read().strip()
+                except Exception:
+                    pass
+
+        if app or title:
+            return (app or title.split()[-1] or "Unknown"), title
+
+    return "Unknown", ""
 
 
 def extract_domain(app: str, title: str) -> str:
@@ -704,6 +942,9 @@ ExecStart={exec_path}
 Restart=on-failure
 RestartSec=10
 TimeoutStopSec=10
+# Pass graphical session vars when the session manager provides them.
+# Even when absent, the agent detects them from /proc at startup.
+PassEnvironment=DISPLAY XAUTHORITY WAYLAND_DISPLAY DBUS_SESSION_BUS_ADDRESS XDG_SESSION_TYPE XDG_RUNTIME_DIR
 
 [Install]
 WantedBy=graphical-session.target
@@ -754,7 +995,10 @@ def install(server_url: str = None, admin_key: str = None) -> None:
     base      = (server_url or _base_url()).rstrip("/")
     agent_key = ""
     try:
-        resp = requests.get(f"{base}/agent-config", timeout=10, verify=True)
+        # /agent-config requires admin credentials — pass admin_key as X-API-Key.
+        # Without it the server returns 401 and we fall back to manual key entry.
+        headers = {"X-API-Key": admin_key} if admin_key else {}
+        resp = requests.get(f"{base}/agent-config", headers=headers, timeout=10, verify=True)
         if resp.ok:
             cfg     = resp.json()
             fetched = cfg.get("server_url", "").rstrip("/")
@@ -763,6 +1007,8 @@ def install(server_url: str = None, admin_key: str = None) -> None:
             agent_key = cfg.get("agent_api_key", "")
             if agent_key:
                 _LOG.info("  Agent API key received from /agent-config")
+        elif resp.status_code == 401:
+            _LOG.warning("  /agent-config requires --admin-key; skipping key auto-fetch")
     except Exception as e:
         _LOG.warning("  Could not fetch /agent-config: %s", e)
 
@@ -796,7 +1042,15 @@ def install(server_url: str = None, admin_key: str = None) -> None:
         json.dump(config, f, indent=4)
     _LOG.info("  Config written: %s", USER_CONFIG_PATH)
 
-    exec_path = os.path.abspath(sys.argv[0])
+    # Prefer the wrapper script created by install.sh (~/.local/bin/telemetry-agent)
+    # because it is a real executable that calls the venv Python.  sys.argv[0] is a
+    # plain .py file with no shebang — systemd cannot exec it directly (status=203/EXEC).
+    _wrapper = os.path.join(os.path.expanduser("~"), ".local", "bin", "telemetry-agent")
+    if os.path.isfile(_wrapper) and os.access(_wrapper, os.X_OK):
+        exec_path = _wrapper
+    else:
+        # Fallback: explicit "venv_python script.py" — works without the wrapper
+        exec_path = f"{sys.executable} {os.path.abspath(__file__)}"
 
     # systemd user units — under ~/.config/systemd/user/
     try:
@@ -883,6 +1137,11 @@ def main() -> None:
         uninstall()
         return
 
+    # Ensure DISPLAY/XAUTHORITY/DBUS_SESSION_BUS_ADDRESS are available.
+    # Systemd user services don't inherit the graphical session environment,
+    # so xdotool and xprop silently fail without this.
+    _detect_x11_env()
+
     if not _acquire_singleton():
         sys.exit(0)
 
@@ -917,6 +1176,8 @@ def main() -> None:
             save_to_backup(username, hostname, gap_events)
 
     _last_tick_wall = time.time()
+    _last_tick_mono = time.monotonic()         # monotonic anchor for tick elapsed
+    state_eng = StateEngine(IDLE_THRESHOLD)   # activity state machine
 
     def _shutdown(sig, _frame):
         _LOG.info("Signal %d received — flushing and exiting", sig)
@@ -931,31 +1192,51 @@ def main() -> None:
 
     try:
         while True:
-            # ── Sleep/resume gap detection (same logic as Windows agent) ──────────
-            _now_wall   = time.time()
-            _tick_delta = _now_wall - _last_tick_wall
-            _last_tick_wall = _now_wall
-            if _tick_delta > TICK_INTERVAL * 3:
+            # ── Monotonic elapsed for this tick ──────────────────────────────────
+            _mono_now       = time.monotonic()
+            _tick_elapsed   = _mono_now - _last_tick_mono
+            _last_tick_mono = _mono_now
+
+            # ── Wall-clock for sleep/resume gap detection ONLY ────────────────────
+            _wall_now   = time.time()
+            _wall_delta = _wall_now - _last_tick_wall
+            _last_tick_wall = _wall_now
+
+            if _wall_delta > TICK_INTERVAL * 3:
                 gap_start = datetime.fromtimestamp(
-                    _now_wall - _tick_delta, tz=timezone.utc
+                    _wall_now - _wall_delta, tz=timezone.utc
                 ).isoformat()
                 event_buffer.append({
                     "app": "Screen Off", "domain": "", "active": False, "locked": True,
-                    "duration": int(_tick_delta), "timestamp": gap_start,
+                    "duration": int(_wall_delta), "timestamp": gap_start,
                 })
-                elapsed_since_flush += int(_tick_delta)
-                _LOG.info("Sleep/resume gap: %ds captured", int(_tick_delta))
+                _LOG.info("Sleep/resume gap: %ds captured", int(_wall_delta))
+                state_eng.on_sleep_gap(int(_wall_delta))
+                compressed = aggregate_events(event_buffer)
+                if flush_batch(username, hostname, compressed):
+                    event_buffer.clear()
+                    flush_backup(username, hostname)
+                else:
+                    save_to_backup(username, hostname, compressed)
+                    event_buffer.clear()
+                elapsed_since_log   = 0
+                elapsed_since_flush = 0
+                _last_tick_mono = time.monotonic()
+                time.sleep(TICK_INTERVAL)
+                continue
 
             # ── Sample current state ───────────────────────────────────────────────
             is_locked = is_session_locked()
             idle_secs = get_idle_seconds()
-            is_active = not is_locked and (idle_secs < IDLE_THRESHOLD)
             app_name, win_title = get_active_window()
             domain = extract_domain(app_name, win_title) if not is_locked else ""
 
             state.update(app_name)
-            elapsed_since_log   += TICK_INTERVAL
-            elapsed_since_flush += TICK_INTERVAL
+            elapsed_since_log   += _tick_elapsed
+            elapsed_since_flush += _tick_elapsed
+
+            current_state = state_eng.tick(idle_secs, is_locked, _tick_elapsed)
+            is_active = current_state == ActivityState.ACTIVE
 
             _write_status_file(app_name, is_active, is_locked, idle_secs)
 
@@ -963,17 +1244,19 @@ def main() -> None:
             if elapsed_since_log >= LOG_INTERVAL:
                 rotate_logs()
                 now = datetime.now(timezone.utc).isoformat()
+                _event_duration = max(1, min(int(elapsed_since_log), LOG_INTERVAL * 3))
 
                 event_buffer.append({
                     "app":       state.current_app,
                     "domain":    domain,
                     "active":    is_active,
                     "locked":    is_locked,
-                    "duration":  LOG_INTERVAL,
+                    "duration":  _event_duration,
                     "timestamp": now,
                 })
                 _save_last_seen(now, state.current_app)
-                _accumulate(state.current_app, domain, is_active, is_locked, LOG_INTERVAL)
+                _accumulate(state.current_app, domain, is_active, is_locked, _event_duration)
+                state_eng.enforce_invariant()
                 _write_cache(username, hostname)
 
                 prev_app       = last_event_app

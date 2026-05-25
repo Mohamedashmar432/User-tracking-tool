@@ -222,36 +222,33 @@ class ActivityState(Enum):
     ACTIVE = "active"
     IDLE   = "idle"
     LOCKED = "locked"
-    SLEEP  = "sleep"
 
 
 class StateEngine:
     """
-    State-machine that tracks ACTIVE / IDLE / LOCKED / SLEEP using
-    time.monotonic() deltas exclusively.  Never uses event durations
-    or constant TICK_INTERVAL additions.
+    State-machine that tracks ACTIVE / IDLE / LOCKED using
+    tick_elapsed accumulators exclusively.  Never uses time.monotonic()
+    directly after construction.
 
-    Invariant: active_seconds <= session_elapsed_seconds always.
+    Invariant: active_seconds + idle_seconds + locked_seconds <= session_elapsed_seconds always.
     """
 
-    def __init__(self, idle_threshold: int):
-        self._threshold      = idle_threshold
-        self._state          = ActivityState.IDLE
-        self._mono_start     = time.monotonic()
-        self._active_seconds = 0.0
-        self._idle_seconds   = 0.0
-        self._locked_seconds = 0.0
+    def __init__(self, idle_threshold: int, max_tick_seconds: float = 30.0):
+        self._threshold               = idle_threshold
+        self._max_tick                = max_tick_seconds
+        self._state                   = ActivityState.IDLE
+        self._active_seconds          = 0.0
+        self._idle_seconds            = 0.0
+        self._locked_seconds          = 0.0
+        self._session_elapsed_seconds = 0.0
 
     def tick(self, idle_secs: int, is_locked: bool, tick_elapsed: float) -> "ActivityState":
         """
         Advance the engine by one tick.
         tick_elapsed: actual seconds elapsed this tick (from time.monotonic()).
-        Also shifts _mono_start so session_elapsed_seconds stays consistent.
         """
-        tick_elapsed = max(0.0, min(tick_elapsed, float(self._threshold)))
-
-        # Keep session_elapsed in sync with accumulated tick_elapsed values
-        self._mono_start -= tick_elapsed
+        tick_elapsed = max(0.0, min(tick_elapsed, self._max_tick))
+        self._session_elapsed_seconds += tick_elapsed   # accumulate real elapsed
 
         if is_locked:
             self._state = ActivityState.LOCKED
@@ -266,26 +263,27 @@ class StateEngine:
         return self._state
 
     def on_sleep_gap(self, gap_seconds: float) -> None:
-        """Gap time is classified as LOCKED but does NOT advance active counter.
-        Shifts _mono_start backward so session_elapsed_seconds reflects the gap."""
-        gap = max(0.0, gap_seconds)
-        self._locked_seconds += gap
-        self._mono_start -= gap
+        """Gap time is classified as LOCKED and advances session_elapsed_seconds."""
+        gap_seconds = max(0.0, gap_seconds)
+        self._locked_seconds += gap_seconds
+        self._session_elapsed_seconds += gap_seconds
+        self._state = ActivityState.LOCKED   # state is LOCKED during a sleep gap
 
     def enforce_invariant(self) -> None:
-        """Hard cap: active + idle + locked must not exceed session elapsed."""
-        session_el = self.session_elapsed_seconds
+        """Hard cap: active + idle + locked <= session elapsed."""
+        session_el = self._session_elapsed_seconds
         total = self._active_seconds + self._idle_seconds + self._locked_seconds
+        # 1-second tolerance absorbs sub-second accumulation jitter
         if total > session_el + 1.0:
+            _LOG.warning(
+                "StateEngine invariant violation: total=%.0fs session=%.0fs — scaling down",
+                total, session_el,
+            )
             if total > 0:
                 scale = session_el / total
                 self._active_seconds  *= scale
                 self._idle_seconds    *= scale
                 self._locked_seconds  *= scale
-            _LOG.warning(
-                "StateEngine invariant violation: total=%.0fs session=%.0fs — scaled down",
-                total, session_el,
-            )
 
     @property
     def state(self) -> "ActivityState":
@@ -309,16 +307,17 @@ class StateEngine:
 
     @property
     def session_elapsed_seconds(self) -> float:
-        return time.monotonic() - self._mono_start
+        return self._session_elapsed_seconds
 
     def to_cache_dict(self) -> dict:
         """Return counters safe for writing to cache.json."""
+        snapshot_elapsed = self._session_elapsed_seconds   # single snapshot
         self.enforce_invariant()
         return {
             "active_seconds":  int(self._active_seconds),
             "idle_seconds":    int(self._idle_seconds),
             "locked_seconds":  int(self._locked_seconds),
-            "session_elapsed": int(self.session_elapsed_seconds),
+            "session_elapsed": int(snapshot_elapsed),
         }
 
 
@@ -1578,21 +1577,26 @@ def main():
             save_to_backup(username, hostname, gap_events)
 
     _last_tick_wall = time.time()   # wall-clock anchor for sleep-resume detection
+    _last_tick_mono = time.monotonic()          # monotonic anchor for real elapsed
+    state_eng = StateEngine(IDLE_THRESHOLD)    # activity state machine
 
     try:
         while True:
-            # ── Sleep/resume gap detection ───────────────────────────────────────
-            # When Windows suspends the machine, this process is frozen.
-            # time.sleep() returns immediately after wake, but the wall clock
-            # has jumped forward by the sleep duration.  Detect the jump and
-            # inject a Screen Off event so the gap shows in the dashboard.
-            _now_wall   = time.time()
-            _tick_delta = _now_wall - _last_tick_wall
-            _last_tick_wall = _now_wall
-            if _tick_delta > TICK_INTERVAL * 3:          # >15 s gap → system slept
-                _sleep_gap = int(_tick_delta)
+            # ── Monotonic elapsed for this tick ──────────────────────────────────
+            _mono_now       = time.monotonic()
+            _tick_elapsed   = _mono_now - _last_tick_mono
+            _last_tick_mono = _mono_now
+
+            # ── Wall-clock anchor — ONLY for sleep/resume gap detection ──────────
+            # time.monotonic() is frozen during suspend; time.time() jumps on resume.
+            _wall_now   = time.time()
+            _wall_delta = _wall_now - _last_tick_wall
+            _last_tick_wall = _wall_now
+
+            if _wall_delta > TICK_INTERVAL * 3:
+                _sleep_gap = int(_wall_delta)
                 _gap_start = datetime.fromtimestamp(
-                    _now_wall - _tick_delta, tz=timezone.utc
+                    _wall_now - _wall_delta, tz=timezone.utc
                 ).isoformat()
                 event_buffer.append({
                     "app":       "Screen Off",
@@ -1603,7 +1607,7 @@ def main():
                     "timestamp": _gap_start,
                 })
                 _LOG.info("Sleep/resume gap: %ds of screen-off time captured", _sleep_gap)
-                # Flush gap event immediately so it is not lost on a subsequent crash
+                state_eng.on_sleep_gap(_sleep_gap)
                 _compressed = aggregate_events(event_buffer)
                 if flush_batch(username, hostname, _compressed):
                     event_buffer.clear()
@@ -1611,16 +1615,11 @@ def main():
                 else:
                     save_to_backup(username, hostname, _compressed)
                     event_buffer.clear()
-                # Reset both elapsed counters.  The gap already accounts for the
-                # missing time, so the next LOG_INTERVAL event must count from zero.
-                # Without this reset, elapsed_since_flush was double-incremented
-                # (once by += _sleep_gap here, once by += TICK_INTERVAL below),
-                # and elapsed_since_log carried over pre-sleep partial time causing
-                # a spurious active event immediately after every resume.
                 elapsed_since_log   = 0
                 elapsed_since_flush = 0
+                _last_tick_mono = time.monotonic()
                 time.sleep(TICK_INTERVAL)
-                continue  # skip normal tick processing for this iteration
+                continue
 
             # ── Sample foreground state ──────────────────────────────────────────
             is_locked = is_workstation_locked()
@@ -1631,8 +1630,12 @@ def main():
             domain = extract_domain(hwnd, app_name) if (hwnd and not is_locked) else ""
 
             state.update(app_name)
-            elapsed_since_log   += TICK_INTERVAL
-            elapsed_since_flush += TICK_INTERVAL
+            elapsed_since_log   += _tick_elapsed
+            elapsed_since_flush += _tick_elapsed
+
+            # Advance state machine with real elapsed
+            current_state = state_eng.tick(idle_secs, is_locked, _tick_elapsed)
+            is_active = current_state == ActivityState.ACTIVE
 
             # ── Write real-time status (every tick = ~5 s lag for UI) ────────────
             _write_status_file(app_name, is_active, is_locked, idle_secs)
@@ -1662,19 +1665,21 @@ def main():
                     print(f"  [warn] Log write failed: {e}")
 
                 # Raw event for the analytics server (minimal schema)
+                _event_duration = max(1, min(int(elapsed_since_log), LOG_INTERVAL * 3))
                 event_buffer.append({
                     "app":       state.current_app,
                     "domain":    domain,
                     "active":    is_active,
                     "locked":    is_locked,
-                    "duration":  LOG_INTERVAL,
+                    "duration":  _event_duration,
                     "timestamp": now,
                 })
                 # Persist timestamp so next startup can detect any gap (sleep/shutdown)
                 _save_last_seen(now, state.current_app)
 
                 # ── Update local cache (UI reads this when server unreachable) ────
-                _accumulate(state.current_app, domain, is_active, is_locked, LOG_INTERVAL)
+                _accumulate(state.current_app, domain, is_active, is_locked, _event_duration)
+                state_eng.enforce_invariant()
                 _write_cache(username, hostname)
 
                 # ── Flush triggers ───────────────────────────────────────────────
