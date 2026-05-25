@@ -44,3 +44,5 @@ migrate.py
 
 # Local development test scripts (not part of the deployable product)
 test_*.py
+# But track the formal tests/ directory
+!tests/

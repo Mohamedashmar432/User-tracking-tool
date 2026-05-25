@@ -65,6 +65,7 @@ import getpass
 import re
 import ctypes
 from datetime import datetime, timezone
+from enum import Enum
 
 import requests
 
@@ -116,7 +117,7 @@ _cfg = _load_config()
 # ── Configuration ───────────────────────────────────────────────────────────────
 
 IDLE_THRESHOLD    = _cfg.get("idle_threshold",  300)  # seconds
-AGENT_VERSION     = "3.0"   # bump this before every EXE build
+AGENT_VERSION     = "3.1"   # bump this before every EXE build
 
 TICK_INTERVAL     = _cfg.get("tick_interval",    5)   # seconds
 LOG_INTERVAL      = _cfg.get("log_interval",    30)   # seconds — 30s balances granularity vs storage cost
@@ -213,6 +214,112 @@ def _accumulate(app: str, domain: str, is_active: bool, is_locked: bool, duratio
             _acc_productive += duration
     else:
         _acc_idle += duration
+
+
+# ── Activity state machine ────────────────────────────────────────────────────
+
+class ActivityState(Enum):
+    ACTIVE = "active"
+    IDLE   = "idle"
+    LOCKED = "locked"
+    SLEEP  = "sleep"
+
+
+class StateEngine:
+    """
+    State-machine that tracks ACTIVE / IDLE / LOCKED / SLEEP using
+    time.monotonic() deltas exclusively.  Never uses event durations
+    or constant TICK_INTERVAL additions.
+
+    Invariant: active_seconds <= session_elapsed_seconds always.
+    """
+
+    def __init__(self, idle_threshold: int):
+        self._threshold      = idle_threshold
+        self._state          = ActivityState.IDLE
+        self._mono_start     = time.monotonic()
+        self._active_seconds = 0.0
+        self._idle_seconds   = 0.0
+        self._locked_seconds = 0.0
+
+    def tick(self, idle_secs: int, is_locked: bool, tick_elapsed: float) -> "ActivityState":
+        """
+        Advance the engine by one tick.
+        tick_elapsed: actual seconds elapsed this tick (from time.monotonic()).
+        Also shifts _mono_start so session_elapsed_seconds stays consistent.
+        """
+        tick_elapsed = max(0.0, min(tick_elapsed, float(self._threshold)))
+
+        # Keep session_elapsed in sync with accumulated tick_elapsed values
+        self._mono_start -= tick_elapsed
+
+        if is_locked:
+            self._state = ActivityState.LOCKED
+            self._locked_seconds += tick_elapsed
+        elif idle_secs >= self._threshold:
+            self._state = ActivityState.IDLE
+            self._idle_seconds += tick_elapsed
+        else:
+            self._state = ActivityState.ACTIVE
+            self._active_seconds += tick_elapsed
+
+        return self._state
+
+    def on_sleep_gap(self, gap_seconds: float) -> None:
+        """Gap time is classified as LOCKED but does NOT advance active counter.
+        Shifts _mono_start backward so session_elapsed_seconds reflects the gap."""
+        gap = max(0.0, gap_seconds)
+        self._locked_seconds += gap
+        self._mono_start -= gap
+
+    def enforce_invariant(self) -> None:
+        """Hard cap: active + idle + locked must not exceed session elapsed."""
+        session_el = self.session_elapsed_seconds
+        total = self._active_seconds + self._idle_seconds + self._locked_seconds
+        if total > session_el + 1.0:
+            if total > 0:
+                scale = session_el / total
+                self._active_seconds  *= scale
+                self._idle_seconds    *= scale
+                self._locked_seconds  *= scale
+            _LOG.warning(
+                "StateEngine invariant violation: total=%.0fs session=%.0fs — scaled down",
+                total, session_el,
+            )
+
+    @property
+    def state(self) -> "ActivityState":
+        return self._state
+
+    @property
+    def is_active(self) -> bool:
+        return self._state == ActivityState.ACTIVE
+
+    @property
+    def active_seconds(self) -> float:
+        return self._active_seconds
+
+    @property
+    def idle_seconds(self) -> float:
+        return self._idle_seconds
+
+    @property
+    def locked_seconds(self) -> float:
+        return self._locked_seconds
+
+    @property
+    def session_elapsed_seconds(self) -> float:
+        return time.monotonic() - self._mono_start
+
+    def to_cache_dict(self) -> dict:
+        """Return counters safe for writing to cache.json."""
+        self.enforce_invariant()
+        return {
+            "active_seconds":  int(self._active_seconds),
+            "idle_seconds":    int(self._idle_seconds),
+            "locked_seconds":  int(self._locked_seconds),
+            "session_elapsed": int(self.session_elapsed_seconds),
+        }
 
 
 def _write_status_file(app: str, active: bool, locked: bool, idle_secs: int) -> None:
@@ -987,6 +1094,17 @@ def _register_watchdog_task(exe_path: str) -> bool:
     return _schtasks_import_xml("TelemetryAgentWatchdog", xml)
 
 
+def _register_ui_task(ui_exe_path: str) -> bool:
+    """
+    Register TelemetryUI as an ONLOGON scheduled task so the tray companion
+    starts automatically on every login.  Uses the same schtasks /xml method
+    as the agent to stay Defender-safe.
+    """
+    trigger = "\n    <LogonTrigger><Enabled>true</Enabled></LogonTrigger>"
+    xml = _task_xml(ui_exe_path, trigger)
+    return _schtasks_import_xml("TelemetryUI", xml)
+
+
 def _acquire_singleton() -> bool:
     """
     Acquire a named Windows mutex to enforce a single running instance.
@@ -1087,6 +1205,22 @@ def _ensure_startup_registered(exe_path: str) -> None:
     except Exception as e:
         _LOG.warning("Could not verify registry Run key: %s", e)
 
+    # 4. UI companion scheduled task (TelemetryUI)
+    ui_exe = os.path.join("C:\\Program Files\\TelemetryUI", "telemetry_ui.exe")
+    if os.path.exists(ui_exe):
+        try:
+            r = subprocess.run(
+                ["schtasks", "/query", "/tn", "TelemetryUI"],
+                capture_output=True, timeout=10,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                startupinfo=_si,
+            )
+            if r.returncode != 0:
+                _LOG.warning("TelemetryUI task missing — re-registering")
+                _register_ui_task(ui_exe)
+        except Exception as e:
+            _LOG.warning("Could not verify TelemetryUI task: %s", e)
+
 
 def install(server_url: str = None, admin_key: str = None) -> None:
     """
@@ -1121,20 +1255,23 @@ def install(server_url: str = None, admin_key: str = None) -> None:
             sys.exit(1)
 
     # 2. Resolve base server URL and shared agent key from /agent-config
+    #    /agent-config now requires admin credentials — pass admin_key as X-API-Key.
     base      = (server_url or _base_url()).rstrip("/")
     agent_key = ""
     try:
-        resp = requests.get(f"{base}/agent-config", timeout=10, verify=True)
+        headers = {"X-API-Key": admin_key} if admin_key else {}
+        resp = requests.get(f"{base}/agent-config", headers=headers, timeout=10, verify=True)
         if resp.ok:
             cfg = resp.json()
             fetched = cfg.get("server_url", "").rstrip("/")
             if fetched:
                 _LOG.info("  /agent-config returned server_url: %s", fetched)
                 base = fetched
-            # Pick up the shared AGENT_API_KEY served by the server
             agent_key = cfg.get("agent_api_key", "")
             if agent_key:
                 _LOG.info("  Agent API key received from /agent-config")
+        elif resp.status_code == 401:
+            _LOG.warning("  /agent-config requires --admin-key; skipping key auto-fetch")
     except Exception as e:
         _LOG.warning("  Could not fetch /agent-config: %s — using %s", e, base)
 
@@ -1211,6 +1348,14 @@ def install(server_url: str = None, admin_key: str = None) -> None:
         _LOG.info("  Registry Run key added (HKCU\\...\\Run\\TelemetryAgent)")
     else:
         _LOG.warning("  Registry Run key failed — non-critical")
+
+    # 5b. Register TelemetryUI scheduled task if the UI exe is present
+    ui_exe = os.path.join("C:\\Program Files\\TelemetryUI", "telemetry_ui.exe")
+    if os.path.exists(ui_exe):
+        if _register_ui_task(ui_exe):
+            _LOG.info("  UI companion task 'TelemetryUI' registered (ONLOGON)")
+        else:
+            _LOG.warning("  UI task registration failed — run install-script from dashboard to fix")
 
     # 6. Connection check
     if check_connection(retries=3, delay=3):
@@ -1457,8 +1602,25 @@ def main():
                     "duration":  _sleep_gap,
                     "timestamp": _gap_start,
                 })
-                elapsed_since_flush += _sleep_gap
                 _LOG.info("Sleep/resume gap: %ds of screen-off time captured", _sleep_gap)
+                # Flush gap event immediately so it is not lost on a subsequent crash
+                _compressed = aggregate_events(event_buffer)
+                if flush_batch(username, hostname, _compressed):
+                    event_buffer.clear()
+                    flush_backup(username, hostname)
+                else:
+                    save_to_backup(username, hostname, _compressed)
+                    event_buffer.clear()
+                # Reset both elapsed counters.  The gap already accounts for the
+                # missing time, so the next LOG_INTERVAL event must count from zero.
+                # Without this reset, elapsed_since_flush was double-incremented
+                # (once by += _sleep_gap here, once by += TICK_INTERVAL below),
+                # and elapsed_since_log carried over pre-sleep partial time causing
+                # a spurious active event immediately after every resume.
+                elapsed_since_log   = 0
+                elapsed_since_flush = 0
+                time.sleep(TICK_INTERVAL)
+                continue  # skip normal tick processing for this iteration
 
             # ── Sample foreground state ──────────────────────────────────────────
             is_locked = is_workstation_locked()
