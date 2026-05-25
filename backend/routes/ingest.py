@@ -11,6 +11,33 @@ from ..deps import storage, verify_ingest_key
 
 router = APIRouter()
 
+_MAX_EVENT_DURATION  = 86_400    # 24 h — single event cap
+_MAX_TOTAL_BATCH_DUR = 86_400    # 24 h — batch total cap
+
+
+def _validate_events(events: list) -> list:
+    """
+    Sanitise event list before writing to storage:
+    - Skip zero/negative-duration events.
+    - Clamp individual event duration to [1, _MAX_EVENT_DURATION].
+    - If the batch total exceeds _MAX_TOTAL_BATCH_DUR, scale all proportionally.
+    """
+    cleaned = []
+    for ev in events:
+        dur = int(ev.get("duration", 0))
+        if dur < 1:
+            continue
+        dur = min(dur, _MAX_EVENT_DURATION)
+        cleaned.append({**ev, "duration": dur})
+
+    total = sum(e["duration"] for e in cleaned)
+    if total > _MAX_TOTAL_BATCH_DUR and total > 0:
+        scale = _MAX_TOTAL_BATCH_DUR / total
+        cleaned = [{**e, "duration": max(1, int(e["duration"] * scale))}
+                   for e in cleaned]
+
+    return cleaned
+
 
 class IngestPayload(BaseModel):
     user:   str
@@ -26,8 +53,13 @@ class RegisterDevicePayload(BaseModel):
 async def ingest(payload: IngestPayload, resolved_user: str = Depends(verify_ingest_key)):
     if not payload.events:
         raise HTTPException(status_code=400, detail="Empty event batch")
+
+    clean_events = _validate_events(payload.events)
+    if not clean_events:
+        raise HTTPException(status_code=400, detail="Batch contains no valid events")
+
     target_user = payload.user if resolved_user == "*" else resolved_user
-    written = storage.write_raw_batch(target_user, payload.device, payload.events)
+    written = storage.write_raw_batch(target_user, payload.device, clean_events)
     return {"accepted": written, "total": len(payload.events)}
 
 
