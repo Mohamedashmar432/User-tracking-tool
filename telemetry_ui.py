@@ -58,7 +58,7 @@ _SERVER_BASE = (_cfg.get("ingest_url", "") or "").replace("/ingest", "").rstrip(
 _DEVICE_KEY  = _cfg.get("api_key", "")
 _AUTO_REFRESH = 30  # seconds
 
-UI_VERSION = "3.0"
+UI_VERSION = "3.1"
 
 # ── Theme ─────────────────────────────────────────────────────────────────────
 def _detect_dark_mode() -> bool:
@@ -105,6 +105,152 @@ def _fmt_time(secs: int) -> str:
     h, m = divmod(int(secs), 3600)
     m = m // 60
     return f"{h}h {m}m" if h else f"{m}m"
+
+
+# ── Native Windows look (DWM) ─────────────────────────────────────────────────
+def _apply_dwm_effects(win: tk.Misc, dark: bool) -> None:
+    """
+    Apply Win10/11 DWM cosmetics to a tkinter window:
+      • Immersive dark mode   (title bar / chrome in dark)
+      • Rounded corners       (Win11, DWMWCP_ROUND)
+      • Drop shadow           (DwmExtendFrameIntoClientArea margin = 1 px)
+    All calls are best-effort — silently skipped on unsupported Windows builds.
+    """
+    try:
+        import ctypes
+        hwnd = ctypes.windll.user32.GetParent(win.winfo_id())
+        if not hwnd:
+            hwnd = win.winfo_id()
+
+        dwm = ctypes.windll.dwmapi
+
+        # Dark/light mode for non-client area (Win10 1903+, attr 20; older uses 19)
+        _dark = ctypes.c_int(1 if dark else 0)
+        for attr in (20, 19):
+            try:
+                dwm.DwmSetWindowAttribute(hwnd, attr, ctypes.byref(_dark), ctypes.sizeof(_dark))
+            except Exception:
+                pass
+
+        # Rounded corners — Win11 only (attr 33, DWMWCP_ROUND = 2)
+        _corner = ctypes.c_int(2)
+        try:
+            dwm.DwmSetWindowAttribute(hwnd, 33, ctypes.byref(_corner), ctypes.sizeof(_corner))
+        except Exception:
+            pass
+
+        # Drop shadow via 1-px frame extension
+        class _MARGINS(ctypes.Structure):
+            _fields_ = [("l", ctypes.c_int), ("r", ctypes.c_int),
+                        ("t", ctypes.c_int), ("b", ctypes.c_int)]
+        try:
+            dwm.DwmExtendFrameIntoClientArea(hwnd, ctypes.byref(_MARGINS(1, 1, 1, 1)))
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+def _fade_in(win: tk.Misc, target: float = 0.97, steps: int = 10) -> None:
+    """Smooth alpha fade-in over ~120 ms."""
+    for i in range(1, steps + 1):
+        try:
+            win.attributes("-alpha", (i / steps) * target)
+            win.update_idletasks()
+        except Exception:
+            break
+        time.sleep(0.012)
+
+
+# ── UI self-healing startup ────────────────────────────────────────────────────
+def _ensure_ui_startup_registered() -> None:
+    """
+    Re-register the TelemetryUI scheduled task if it was deleted.
+    Mirrors the self-healing logic in telemetry_agent._ensure_startup_registered().
+    Runs once at startup in a background thread — never blocks the tray.
+    """
+    if not getattr(sys, "frozen", False):
+        return
+    try:
+        si = subprocess.STARTUPINFO()
+        si.dwFlags    |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = 0
+        r = subprocess.run(
+            ["schtasks", "/query", "/tn", "TelemetryUI"],
+            capture_output=True, timeout=10,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            startupinfo=si,
+        )
+        if r.returncode == 0:
+            return  # task exists — nothing to do
+
+        # Task missing — re-create it
+        current_exe = sys.executable
+        trigger_xml = (
+            '<?xml version="1.0" encoding="UTF-16"?>'
+            '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">'
+            "<Triggers><LogonTrigger><Enabled>true</Enabled></LogonTrigger></Triggers>"
+            "<Actions><Exec>"
+            f"<Command>{current_exe}</Command>"
+            "</Exec></Actions>"
+            "<Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>"
+            "<ExecutionTimeLimit>PT0S</ExecutionTimeLimit></Settings>"
+            "</Task>"
+        )
+        tmp = os.path.join(os.path.dirname(current_exe), "TelemetryUI_task.xml")
+        with open(tmp, "w", encoding="utf-16") as f:
+            f.write(trigger_xml)
+        subprocess.run(
+            ["schtasks", "/create", "/tn", "TelemetryUI", "/xml", tmp, "/f"],
+            capture_output=True, timeout=15,
+            creationflags=subprocess.CREATE_NO_WINDOW, startupinfo=si,
+        )
+        try:
+            os.remove(tmp)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+# ── Agent health check ─────────────────────────────────────────────────────────
+def _ensure_agent_running() -> None:
+    """
+    Verify telemetry_agent.exe is running.  If not, start it so data
+    collection resumes immediately without requiring the user to log out/in.
+    Safe to call repeatedly — the agent's own mutex prevents double-running.
+    """
+    try:
+        si = subprocess.STARTUPINFO()
+        si.dwFlags    |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = 0
+        r = subprocess.run(
+            ["tasklist", "/fi", "imagename eq telemetry_agent.exe",
+             "/fo", "csv", "/nh"],
+            capture_output=True, text=True, timeout=8,
+            creationflags=subprocess.CREATE_NO_WINDOW, startupinfo=si,
+        )
+        if "telemetry_agent.exe" in r.stdout.lower():
+            return  # already running
+
+        # Try to find the agent EXE next to this UI executable
+        agent_exe = os.path.join(
+            os.path.dirname(sys.executable if getattr(sys, "frozen", False)
+                            else os.path.abspath(__file__)),
+            "..", "TelemetryAgent", "telemetry_agent.exe",
+        )
+        agent_exe = os.path.normpath(agent_exe)
+        if not os.path.exists(agent_exe):
+            # Fallback: canonical install path
+            agent_exe = r"C:\Program Files\TelemetryAgent\telemetry_agent.exe"
+        if os.path.exists(agent_exe):
+            subprocess.Popen(
+                [agent_exe],
+                creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW,
+                close_fds=True,
+            )
+    except Exception:
+        pass
 
 
 # ── Self-update ───────────────────────────────────────────────────────────────
@@ -535,11 +681,19 @@ class DashboardWindow:
         self._win.overrideredirect(True)
         self._win.configure(bg=self._theme["BG"])
         self._win.attributes("-topmost", True)
-        self._win.attributes("-alpha", 0.98)
+        self._win.attributes("-alpha", 0.0)   # start invisible; fade_in completes below
 
         self._position_compact()
         self._build_compact()
         self._start_theme_monitor()
+
+        # Apply Win10/11 DWM effects after the window handle is ready
+        self._win.update_idletasks()
+        _apply_dwm_effects(self._win, self._dark)
+
+        # Smooth fade-in so the popup feels instant yet polished
+        _fade_in(self._win)
+
         self.refresh()
 
     # ── Theme ──────────────────────────────────────────────────────────────────
@@ -636,6 +790,9 @@ class DashboardWindow:
         self._status_lbl = tk.Label(hdr, text="Active", fg=T["TEXT"], bg=T["BG2"],
                                     font=("Segoe UI", 11, "bold"))
         self._status_lbl.place(x=34, y=11)
+        # version chip — bottom-left of header
+        tk.Label(hdr, text=f"v{UI_VERSION}", fg=T["MUTED"], bg=T["BG2"],
+                 font=("Segoe UI", 7)).place(x=14, y=32)
         # □ expand, ✕ hide
         tk.Button(hdr, text="□", fg=T["MUTED"], bg=T["BG2"], bd=0,
                   activebackground=T["BG2"], activeforeground=T["TEXT"],
@@ -799,6 +956,10 @@ class DashboardWindow:
                   activebackground=T["BG2"], activeforeground=T["RED"],
                   font=("Segoe UI", 13), cursor="hand2",
                   command=self.hide).place(x=W - 44, y=13)
+
+        # version — bottom-right of title bar
+        tk.Label(hdr, text=f"v{UI_VERSION}", fg=T["MUTED"], bg=T["BG2"],
+                 font=("Segoe UI", 7)).place(x=W - 42, y=37)
 
         tk.Frame(w, bg=T["BORDER"], height=1).pack(fill="x")
 
@@ -1407,6 +1568,8 @@ def run_tray(root: tk.Tk):
     )
     icon = pystray.Icon("TelemetryAgent", _make_tray_icon(), "TelemetryAgent", menu)
 
+    _agent_check_counter = [0]
+
     def _updater():
         while True:
             time.sleep(10)
@@ -1421,6 +1584,12 @@ def run_tray(root: tk.Tk):
             except Exception:
                 pass
 
+            # Check agent is still running every ~5 minutes (30 × 10 s intervals)
+            _agent_check_counter[0] += 1
+            if _agent_check_counter[0] >= 30:
+                _agent_check_counter[0] = 0
+                threading.Thread(target=_ensure_agent_running, daemon=True).start()
+
     threading.Thread(target=_updater, daemon=True).start()
     icon.run()
 
@@ -1430,7 +1599,17 @@ def run_tray(root: tk.Tk):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def main():
-    check_for_update()
+    # ── Background housekeeping (never block the tray from appearing) ──────────
+    # 1. Auto-update: download + self-replace if server has a newer UI version
+    threading.Thread(target=check_for_update, daemon=True).start()
+
+    # 2. Self-healing: re-register the TelemetryUI scheduled task if it was removed
+    threading.Thread(target=_ensure_ui_startup_registered, daemon=True).start()
+
+    # 3. Agent watchdog: start telemetry_agent.exe if it isn't running yet
+    threading.Thread(target=_ensure_agent_running, daemon=True).start()
+
+    # ── Tkinter + tray ────────────────────────────────────────────────────────
     root = tk.Tk()
     root.withdraw()
     root.title("TelemetryAgent UI")

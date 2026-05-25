@@ -1,24 +1,33 @@
 """
 Script delivery and file download endpoints.
 
-All routes are public (no auth required).
+Most routes are public (install scripts, binary downloads).
+/agent-config is protected — it returns the agent API key and must only be
+reachable by authenticated admins running the installer.
 """
 
 import os
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
 
-from ..auth import AGENT_KEY
+from ..auth import AGENT_KEY, require_admin
 from ..deps import _public_base
 
 router = APIRouter()
 
 
 @router.get("/agent-config")
-async def agent_config(request: Request):
-    """Called by the agent during --install to self-configure."""
+async def agent_config(
+    request: Request,
+    _: dict = Depends(require_admin),
+):
+    """
+    Returns server URL, ingest URL, and the shared agent API key.
+    Requires admin credentials (X-API-Key: <ADMIN_API_KEY> or JWT Bearer token).
+    Called by the agent's --install routine with the --admin-key flag.
+    """
     base = _public_base(request)
     return {
         "server_url":    base,

@@ -95,22 +95,77 @@ done
 info "Python: $PYTHON ($($PYTHON --version))"
 
 # Ensure venv module is available
-"$PYTHON" -c "import venv" 2>/dev/null || die "Python venv module missing. Install python3-venv (no sudo needed if Python is in your user environment)."
+"$PYTHON" -c "import venv" 2>/dev/null || die "Python venv module missing.\n  Debian/Ubuntu: sudo apt-get install -y python3-venv\n  Fedora/RHEL  : sudo dnf install -y python3-virtualenv"
 
-# ── Optional system tool check (NO sudo — just inform) ───────────────────────
-# xdotool and xprintidle improve tracking accuracy on X11 but are not required.
-# The agent falls back to D-Bus idle detection if they are absent.
-MISSING_TOOLS=()
-command -v xdotool    &>/dev/null || MISSING_TOOLS+=("xdotool")
-command -v xprintidle &>/dev/null || MISSING_TOOLS+=("xprintidle")
+# ── Required system packages check ───────────────────────────────────────────
+# Collect every missing required package before stopping, so the user can fix
+# everything in one sudo command rather than re-running multiple times.
+DESKTOP="${XDG_CURRENT_DESKTOP:-}"
+MISSING_REQUIRED=()
+MISSING_APT=()
+MISSING_DNF=()
+MISSING_PACMAN=()
 
-if [[ ${#MISSING_TOOLS[@]} -gt 0 ]]; then
-    warn "Optional tools not installed: ${MISSING_TOOLS[*]}"
-    warn "The agent will use D-Bus fallback for idle/window detection — still fully functional."
-    warn "For best accuracy your sysadmin can install them once (no ongoing access needed):"
-    warn "  Debian/Ubuntu : sudo apt-get install -y ${MISSING_TOOLS[*]}"
-    warn "  Fedora/RHEL   : sudo dnf  install -y ${MISSING_TOOLS[*]}"
-    warn "  Arch          : sudo pacman -S --needed ${MISSING_TOOLS[*]//xprintidle/xorg-xprintidle}"
+# python3-tk — required for the UI tray companion (tkinter is not pip-installable)
+if ! "$PYTHON" -c "import tkinter" &>/dev/null 2>&1; then
+    MISSING_REQUIRED+=("python3-tk (tkinter)")
+    MISSING_APT+=("python3-tk")
+    MISSING_DNF+=("python3-tkinter")
+    MISSING_PACMAN+=("tk")
+fi
+
+# AppIndicator GI bindings — required on GNOME and most non-MATE desktops for
+# the tray icon.  On MATE we use the XEmbed/xorg backend instead, so skip it.
+if [[ "${DESKTOP^^}" != *"MATE"* ]]; then
+    _HAS_INDICATOR=false
+    "$PYTHON" -c "import gi; gi.require_version('AyatanaAppIndicator3','0.1'); from gi.repository import AyatanaAppIndicator3" &>/dev/null 2>&1 && _HAS_INDICATOR=true
+    "$PYTHON" -c "import gi; gi.require_version('AppIndicator3','0.1'); from gi.repository import AppIndicator3"                   &>/dev/null 2>&1 && _HAS_INDICATOR=true
+    if ! $_HAS_INDICATOR; then
+        MISSING_REQUIRED+=("gir1.2-ayatanaappindicator3-0.1 (tray icon)")
+        MISSING_APT+=("gir1.2-ayatanaappindicator3-0.1")
+        MISSING_DNF+=("libayatana-appindicator3")
+        MISSING_PACMAN+=("libayatana-appindicator")
+    fi
+fi
+
+if [[ ${#MISSING_REQUIRED[@]} -gt 0 ]]; then
+    echo ""
+    echo -e "${RED}[error]${NC} ${BOLD}Required system packages are missing:${NC}"
+    for pkg in "${MISSING_REQUIRED[@]}"; do
+        echo -e "  ${RED}✗${NC}  $pkg"
+    done
+    echo ""
+    echo -e "  Install them (one-time, requires sudo) and then re-run this installer:"
+    echo ""
+    echo -e "  ${BOLD}Debian / Ubuntu / MATE:${NC}"
+    echo -e "    sudo apt-get install -y ${MISSING_APT[*]}"
+    echo ""
+    if [[ ${#MISSING_DNF[@]} -gt 0 ]]; then
+        echo -e "  ${BOLD}Fedora / RHEL:${NC}"
+        echo -e "    sudo dnf install -y ${MISSING_DNF[*]}"
+        echo ""
+    fi
+    if [[ ${#MISSING_PACMAN[@]} -gt 0 ]]; then
+        echo -e "  ${BOLD}Arch:${NC}"
+        echo -e "    sudo pacman -S --needed ${MISSING_PACMAN[*]}"
+        echo ""
+    fi
+    exit 1
+fi
+
+# ── Optional system tools (warn only — fallbacks exist) ───────────────────────
+MISSING_OPT=()
+command -v xdotool    &>/dev/null || MISSING_OPT+=("xdotool")
+command -v xprintidle &>/dev/null || MISSING_OPT+=("xprintidle")
+command -v xprop      &>/dev/null || MISSING_OPT+=("x11-utils")   # fallback window detector
+
+if [[ ${#MISSING_OPT[@]} -gt 0 ]]; then
+    warn "Optional tools not installed: ${MISSING_OPT[*]}"
+    warn "The agent will run but window-tracking accuracy is reduced without them."
+    warn "Install when convenient (no re-run needed):"
+    warn "  Debian/Ubuntu: sudo apt-get install -y ${MISSING_OPT[*]}"
+    warn "  Fedora/RHEL  : sudo dnf install -y xdotool xprintidle xorg-x11-utils"
+    warn "  Arch         : sudo pacman -S --needed xdotool xorg-xprintidle xorg-xproputils"
     echo ""
 fi
 
@@ -130,8 +185,23 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 info "[1/4] Creating Python virtual environment..."
 mkdir -p "$DATA_DIR"
 
+# Use --system-site-packages so the venv can access gi.repository
+# (needed by pystray for the AppIndicator tray backend on GNOME/MATE/Xfce).
+# Without it pystray falls back to the _xorg backend, which renders the icon
+# but does not forward click events on most modern desktop environments.
+# pip-installed packages in the venv always take precedence over system ones,
+# so there is no risk of version conflicts with requests/pystray/Pillow.
+_needs_venv=false
 if [[ ! -f "$VENV_DIR/bin/python" ]]; then
-    "$PYTHON" -m venv "$VENV_DIR"
+    _needs_venv=true
+elif ! grep -qi "include-system-site-packages = true" "$VENV_DIR/pyvenv.cfg" 2>/dev/null; then
+    info "Recreating venv with --system-site-packages (needed for tray icon)..."
+    rm -rf "$VENV_DIR"
+    _needs_venv=true
+fi
+
+if $_needs_venv; then
+    "$PYTHON" -m venv --system-site-packages "$VENV_DIR"
 fi
 
 VENV_PY="$VENV_DIR/bin/python"
@@ -258,6 +328,26 @@ if ! $AGENT_STARTED; then
         warn "Agent could not start — check log: $DATA_DIR/agent.log"
         warn "Start manually: $VENV_PY $BIN_DIR/linux_telemetry_agent.py"
     fi
+fi
+
+# ── Start UI now (don't wait for next login) ──────────────────────────────────
+# Only launch if a display is available — headless/SSH installs skip this.
+if [[ -n "${DISPLAY:-}" ]] || [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
+    # Kill any stale UI instance first
+    pkill -f "linux_telemetry_ui.py" 2>/dev/null || true
+    sleep 1
+    nohup "$VENV_PY" "$BIN_DIR/linux_telemetry_ui.py" >> "$DATA_DIR/ui.log" 2>&1 &
+    UI_PID=$!
+    disown "$UI_PID" 2>/dev/null || true
+    sleep 2
+    if kill -0 "$UI_PID" 2>/dev/null; then
+        success "UI tray started (PID $UI_PID) — look for the icon in your system tray"
+    else
+        warn "UI could not start — check log: $DATA_DIR/ui.log"
+        warn "Start manually: $UI_WRAPPER"
+    fi
+else
+    info "No display detected — UI skipped (will start automatically on next login)"
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────

@@ -168,7 +168,6 @@ UNPRODUCTIVE_DOMAINS: set = {
 # strings like "youtube.com".  These shorter keywords catch unproductive sites via
 # their name as it appears in the page/tab title.
 UNPRODUCTIVE_TITLE_KEYWORDS: set = {
-    "youtube", "youtu.be",
     "netflix", "prime video", "amazon prime video",
     "hulu", "disney+", "disneyplus", "hbo max", "hbomax", "paramount+",
     "twitch", "crunchyroll", "funimation",
@@ -182,22 +181,102 @@ UNPRODUCTIVE_TITLE_KEYWORDS: set = {
     "steam store", "epic games store",
     "whatsapp", "telegram",
 }
+# NOTE: "youtube" intentionally removed from UNPRODUCTIVE_TITLE_KEYWORDS —
+# YouTube is re-evaluated below against PRODUCTIVE_YOUTUBE_KEYWORDS first.
+
+# ── YouTube productive content keywords ──────────────────────────────────────────
+# If a YouTube tab title contains any of these terms the video is classified as
+# Productive, overriding the default YouTube → Unproductive rule.
+# Match is case-insensitive substring check on the full window/tab title.
+PRODUCTIVE_YOUTUBE_KEYWORDS: frozenset = frozenset({
+    # ── Programming languages ──────────────────────────────────────────────────
+    "python", "javascript", "typescript", "java", "golang", "go lang",
+    "rust", "c++", "c#", "kotlin", "swift", "ruby", "php", "scala",
+    "r programming", "matlab", "bash", "shell scripting", "powershell",
+    "assembly", "fortran", "haskell", "elixir", "erlang", "clojure",
+    # ── Web & frontend ─────────────────────────────────────────────────────────
+    "html", "css", "react", "vue", "angular", "svelte", "nextjs", "next.js",
+    "nuxtjs", "nuxt.js", "tailwind", "bootstrap", "webpack", "vite",
+    "graphql", "rest api", "restful", "web development", "frontend",
+    "backend", "full stack", "fullstack", "web design",
+    # ── Backend & databases ────────────────────────────────────────────────────
+    "node.js", "nodejs", "express", "django", "flask", "fastapi",
+    "spring boot", "laravel", "rails", "asp.net", "dotnet", ".net",
+    "sql", "mysql", "postgresql", "mongodb", "redis", "sqlite",
+    "cassandra", "elasticsearch", "database", "nosql",
+    # ── DevOps & cloud ─────────────────────────────────────────────────────────
+    "devops", "docker", "kubernetes", "k8s", "terraform", "ansible",
+    "jenkins", "github actions", "gitlab ci", "circleci", "travis",
+    "ci/cd", "pipeline", "infrastructure", "iac", "helm",
+    "aws", "azure", "gcp", "google cloud", "cloud computing",
+    "s3", "ec2", "lambda", "cloudformation", "azure devops",
+    "digitalocean", "heroku", "vercel", "netlify",
+    # ── Linux & systems ─────────────────────────────────────────────────────────
+    "linux", "ubuntu", "debian", "centos", "fedora", "arch linux",
+    "unix", "terminal", "command line", "vim", "neovim", "emacs",
+    "bash scripting", "shell script", "cron", "systemd",
+    "operating system", "kernel", "networking", "tcp/ip", "dns",
+    "nginx", "apache", "load balancer", "proxy",
+    # ── Cybersecurity ──────────────────────────────────────────────────────────
+    "cybersecurity", "cyber security", "ethical hacking", "penetration test",
+    "pentest", "bug bounty", "ctf", "capture the flag", "hacking",
+    "vulnerability", "exploit", "malware", "ransomware", "phishing",
+    "encryption", "cryptography", "ssl", "tls", "firewall",
+    "intrusion detection", "siem", "soc analyst", "threat hunting",
+    "owasp", "burp suite", "metasploit", "nmap", "wireshark",
+    "kali linux", "security audit", "zero day", "cve",
+    # ── AI, ML & data science ──────────────────────────────────────────────────
+    "machine learning", "deep learning", "neural network", "artificial intelligence",
+    "ai", "data science", "data engineering", "data analysis",
+    "tensorflow", "pytorch", "keras", "scikit", "pandas", "numpy",
+    "nlp", "natural language processing", "computer vision",
+    "large language model", "llm", "gpt", "transformer", "diffusion",
+    "big data", "spark", "hadoop", "kafka", "airflow", "dbt",
+    "power bi", "tableau", "looker", "data pipeline",
+    # ── Software engineering & architecture ───────────────────────────────────
+    "algorithm", "data structure", "system design", "design pattern",
+    "microservices", "monolith", "event driven", "message queue",
+    "software architecture", "clean code", "solid principles",
+    "unit test", "integration test", "tdd", "bdd", "agile", "scrum",
+    "git", "version control", "open source", "code review",
+    "compiler", "interpreter", "memory management",
+    # ── Mobile & desktop dev ──────────────────────────────────────────────────
+    "android", "ios", "flutter", "react native", "swift",
+    "xamarin", "electron", "tauri", "app development",
+    # ── General technical / educational ──────────────────────────────────────
+    "tutorial", "course", "bootcamp", "lecture", "explained",
+    "how to", "learn ", "introduction to", "beginner guide",
+    "crash course", "roadmap", "interview", "coding", "programming",
+    "project build", "build a", "build an", "from scratch",
+    "workshop", "conference talk", "tech talk", "keynote",
+    "open source project", "code walkthrough", "refactoring",
+})
 
 
 # ── Core categorisation ─────────────────────────────────────────────────────────
 
-@lru_cache(maxsize=2048)
+def _is_productive_youtube(title_l: str) -> bool:
+    """
+    Return True when a YouTube tab title contains at least one technical or
+    educational keyword.  Called before the generic unproductive-domain check
+    so that "Docker Tutorial - YouTube" beats "youtube.com → Unproductive".
+    """
+    return any(kw in title_l for kw in PRODUCTIVE_YOUTUBE_KEYWORDS)
+
+
+@lru_cache(maxsize=4096)
 def categorize(app: str, domain: str) -> str:
     """
     Returns "Productive" or "Unproductive" — no Neutral category.
 
     Priority order:
-    1. Domain unproductive check (YouTube tab in Chrome → Unproductive)
-    2. Domain productive check
-    3. App unproductive check
-    4. App productive check
-    5. Browser with unknown domain → Productive (work browsing assumed)
-    6. Default → Productive (technical-worker assumption)
+    1. YouTube with technical/educational title → Productive (overrides #2)
+    2. Domain unproductive check
+    3. Domain productive check
+    4. App unproductive check
+    5. App productive check
+    6. Browser with unknown domain → Productive (work browsing assumed)
+    7. Default → Productive (technical-worker assumption)
     """
     app_l    = (app    or "").lower().strip()
     domain_l = (domain or "").lower().strip()
@@ -207,15 +286,30 @@ def categorize(app: str, domain: str) -> str:
         domain_l = domain_l[4:]
 
     if domain_l:
+        # ── Step 1: YouTube title override ────────────────────────────────────
+        # The domain field holds the full tab title, e.g.:
+        #   "Docker & Kubernetes Tutorial - YouTube"
+        # If the title contains a technical keyword, classify as Productive
+        # BEFORE the generic "youtube.com → Unproductive" rule fires.
+        is_youtube = (
+            "youtube" in domain_l
+            or "youtu.be" in domain_l
+            or "youtube.com" in domain_l
+        )
+        if is_youtube:
+            if _is_productive_youtube(domain_l):
+                return "Productive"
+            return "Unproductive"   # YouTube but non-technical content
+
+        # ── Steps 2-3: all other domains ──────────────────────────────────────
         if any(k in domain_l for k in UNPRODUCTIVE_DOMAINS):
             return "Unproductive"
-        # Tab titles (e.g. "Never Gonna Give You Up - YouTube") won't match
-        # domain strings like "youtube.com", so check title keywords too.
         if any(k in domain_l for k in UNPRODUCTIVE_TITLE_KEYWORDS):
             return "Unproductive"
         if any(k in domain_l for k in PRODUCTIVE_DOMAINS):
             return "Productive"
 
+    # ── Steps 4-6: app-level fallback ─────────────────────────────────────────
     if any(k in app_l for k in UNPRODUCTIVE_APPS):
         return "Unproductive"
     if any(k in app_l for k in PRODUCTIVE_APPS):
@@ -257,6 +351,9 @@ def _merge_consecutive(events: List[Dict]) -> List[Dict]:
 
 # ── Internal aggregation helpers (operate on pre-merged events) ─────────────────
 
+_MAX_DAY_SECS = 86_400  # 24 h — hard ceiling for any per-day metric
+
+
 def _agg_summary(merged: List[Dict]) -> Dict[str, Any]:
     total_active    = 0
     total_idle      = 0
@@ -276,6 +373,26 @@ def _agg_summary(merged: List[Dict]) -> Dict[str, Any]:
             total_locked += dur
         else:
             total_idle += dur
+
+    # ── 24-hour sanity cap ────────────────────────────────────────────────────
+    # A single calendar day cannot contain more than 86 400 seconds of time.
+    # Inflated totals can occur when:
+    #   • Idle detection fails → everything marked active (fixed in agent, but
+    #     old events already in storage may still be wrong)
+    #   • A sleep-gap event spanning multiple days lands in one partition
+    #   • Agent clock drift or timezone mismatch
+    # Cap each category individually, then scale the whole down proportionally
+    # if the sum still exceeds 24 h so ratios between categories are preserved.
+    total_active  = min(total_active,  _MAX_DAY_SECS)
+    total_idle    = min(total_idle,    _MAX_DAY_SECS)
+    total_locked  = min(total_locked,  _MAX_DAY_SECS)
+    total_tracked = total_active + total_idle + total_locked
+    if total_tracked > _MAX_DAY_SECS:
+        scale         = _MAX_DAY_SECS / total_tracked
+        total_active  = int(total_active  * scale)
+        total_idle    = int(total_idle    * scale)
+        total_locked  = int(total_locked  * scale)
+        productive_secs = int(productive_secs * scale)
 
     top_app = max(app_times, key=app_times.get) if app_times else "None"
     score   = (productive_secs / total_active * 100) if total_active else 0.0

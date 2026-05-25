@@ -18,7 +18,7 @@ from .auth    import AGENT_KEY
 
 _LOG = logging.getLogger("telemetry.api")
 
-APP_VERSION = "3.0"
+APP_VERSION = "3.1"
 
 STARTED_AT  = datetime.now(timezone.utc).isoformat()
 

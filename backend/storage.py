@@ -26,6 +26,7 @@ calls, cutting network round-trips from N → ceil(N/100).
 
 import os
 import json
+import re
 import time
 from collections import OrderedDict
 from datetime import datetime, timezone
@@ -37,6 +38,37 @@ from azure.data.tables import TableServiceClient
 from azure.core.exceptions import ResourceExistsError, ResourceNotFoundError
 
 _LOG = logging.getLogger("telemetry.storage")
+
+# ── OData injection prevention ──────────────────────────────────────────────────
+# Azure Table Storage filter strings are OData expressions built by string
+# concatenation.  Without validation an attacker can inject operators such as
+# "' or '1' eq '1" to bypass user isolation and read any partition.
+#
+# Defence: strict allow-list validation before any value is interpolated.
+# Usernames: alphanumeric, underscore, hyphen, dot, at-sign  (max 64 chars)
+# Dates:     YYYY-MM-DD only
+# Belt-and-suspenders: also OData-escape single quotes (double them).
+
+_RE_SAFE_USER = re.compile(r"^[A-Za-z0-9_\-\.@]{1,64}$")
+_RE_SAFE_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _vuser(user: str) -> str:
+    """Validate and return username, raise ValueError on injection attempt."""
+    if not user or not _RE_SAFE_USER.match(user):
+        raise ValueError(
+            f"Invalid username {user!r} — only letters, digits, '_', '-', '.', '@' allowed"
+        )
+    return user.replace("'", "''")   # OData single-quote escape (belt-and-suspenders)
+
+
+def _vdate(date: str) -> str:
+    """Validate and return date string (YYYY-MM-DD), raise ValueError otherwise."""
+    if not date or not _RE_SAFE_DATE.match(date):
+        raise ValueError(
+            f"Invalid date {date!r} — expected YYYY-MM-DD format"
+        )
+    return date   # digits and hyphens only; no escaping needed
 
 RAW_TABLE        = "RawTelemetry"
 USER_INDEX_TABLE = "UserIndex"
@@ -237,8 +269,9 @@ class TelemetryStorage:
         index_table = self.service.get_table_client(USER_INDEX_TABLE)
 
         # Prefix scan: PartitionKey format is {user}_{YYYY-MM-DD}
-        lo = f"{user}_"
-        hi = f"{user}_\uffff"
+        safe_user = _vuser(user)
+        lo = f"{safe_user}_"
+        hi = f"{safe_user}_\uffff"
         entities = list(raw_table.query_entities(
             f"PartitionKey ge '{lo}' and PartitionKey lt '{hi}'",
             select=["PartitionKey", "RowKey"],
@@ -268,7 +301,7 @@ class TelemetryStorage:
         Returns the number of deleted events.
         """
         raw_table = self.service.get_table_client(RAW_TABLE)
-        pk        = f"{user}_{date}"
+        pk        = f"{_vuser(user)}_{_vdate(date)}"
         entities  = list(raw_table.query_entities(
             f"PartitionKey eq '{pk}'",
             select=["PartitionKey", "RowKey"],
@@ -307,8 +340,9 @@ class TelemetryStorage:
             raise ValueError(f"Username '{new}' is already in use")
 
         # Prefix-scan for every RawTelemetry row belonging to old_name
-        lo = f"{old}_"
-        hi = f"{old}_\uffff"
+        safe_old = _vuser(old)
+        lo = f"{safe_old}_"
+        hi = f"{safe_old}_\uffff"
         old_entities = list(raw_table.query_entities(
             f"PartitionKey ge '{lo}' and PartitionKey lt '{hi}'"
         ))
@@ -406,8 +440,9 @@ class TelemetryStorage:
             raise ValueError(f"Target user '{tgt}' not found")
 
         # Fetch every raw event for source user (prefix scan)
-        lo = f"{src}_"
-        hi = f"{src}_\uffff"
+        safe_src = _vuser(src)
+        lo = f"{safe_src}_"
+        hi = f"{safe_src}_\uffff"
         source_entities = list(raw_table.query_entities(
             f"PartitionKey ge '{lo}' and PartitionKey lt '{hi}'"
         ))
@@ -494,7 +529,7 @@ class TelemetryStorage:
             return cached
 
         table    = self.service.get_table_client(RAW_TABLE)
-        pk       = f"{user}_{date}"
+        pk       = f"{_vuser(user)}_{_vdate(date)}"
         entities = table.query_entities(
             f"PartitionKey eq '{pk}'",
             select=["timestamp", "app", "domain", "active", "locked", "duration"],

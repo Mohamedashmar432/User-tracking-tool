@@ -30,15 +30,31 @@ import subprocess
 import sys
 import threading
 import time
-import tkinter as tk
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+try:
+    import tkinter as tk
+except ModuleNotFoundError:
+    print(
+        "[error] tkinter is not installed.\n"
+        "  tkinter is a system package and cannot be installed via pip.\n"
+        "  Fix with:\n"
+        "    sudo apt-get install -y python3-tk          # Debian / Ubuntu / MATE\n"
+        "    sudo dnf install -y python3-tkinter          # Fedora / RHEL\n"
+        "    sudo pacman -S --needed tk                   # Arch\n"
+        "  Then restart the UI:  ~/.local/bin/telemetry-ui",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
 import pystray
 import requests
 from PIL import Image, ImageDraw
+
+_DESKTOP = os.environ.get("XDG_CURRENT_DESKTOP", "").upper()
 
 # ── XDG paths ─────────────────────────────────────────────────────────────────────
 _XDG_DATA   = os.environ.get("XDG_DATA_HOME",  os.path.expanduser("~/.local/share"))
@@ -73,7 +89,7 @@ _SERVER_BASE  = (_cfg.get("ingest_url", "") or "").replace("/ingest", "").rstrip
 _DEVICE_KEY   = _cfg.get("api_key", "")
 _AUTO_REFRESH = 30   # seconds
 
-UI_VERSION = "3.0"
+UI_VERSION = "3.1"
 
 # ── Theme ─────────────────────────────────────────────────────────────────────────
 def _detect_dark_mode() -> bool:
@@ -1321,7 +1337,123 @@ def _tooltip_text() -> str:
     return "TelemetryAgent — waiting for agent…"
 
 
-def run_tray(root: tk.Tk):
+def _pil_to_pixbuf(img: Image.Image):
+    """Convert a PIL Image to a GdkPixbuf (needed by GTK StatusIcon)."""
+    import io
+    from gi.repository import GdkPixbuf
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    loader = GdkPixbuf.PixbufLoader.new_with_type("png")
+    loader.write(buf.read())
+    loader.close()
+    return loader.get_pixbuf()
+
+
+def _run_gtk_status_tray(root: tk.Tk) -> None:
+    """
+    Tray icon for MATE desktop using Gtk.StatusIcon.
+
+    MATE's Notification Area applet uses the XEmbed protocol.  pystray's xorg
+    backend also uses XEmbed but MATE does NOT forward mouse ButtonPress events
+    to embedded client windows — so pystray clicks are silently swallowed.
+
+    Gtk.StatusIcon avoids this entirely: it is registered as a native GTK status
+    icon and receives activate/popup-menu signals from GTK itself, not via raw
+    X11 event forwarding.
+
+    Runs Gtk.main() in the calling thread.  Always call from a daemon thread.
+    Cross-thread calls back to tkinter use root.after() which is thread-safe.
+    """
+    import gi
+    gi.require_version("Gtk", "3.0")
+    from gi.repository import Gtk, GLib
+
+    _ref: list = [None]   # holds the DashboardWindow instance
+
+    def _toggle():
+        def _do():
+            if _ref[0] and _ref[0]._win.winfo_exists():
+                if _ref[0]._win.state() == "withdrawn":
+                    _ref[0].show()
+                else:
+                    _ref[0].hide()
+            else:
+                _ref[0] = DashboardWindow(root)
+        root.after(0, _do)
+
+    def _on_activate(_icon):
+        _toggle()
+
+    def _on_popup_menu(_icon, button, activate_time):
+        menu = Gtk.Menu()
+
+        item_show = Gtk.MenuItem(label="Show Stats")
+        item_show.connect("activate", lambda *_: _toggle())
+        menu.append(item_show)
+
+        item_dash = Gtk.MenuItem(label="Open Dashboard")
+        def _open(*_):
+            if _SERVER_BASE:
+                import webbrowser
+                webbrowser.open(_SERVER_BASE)
+        item_dash.connect("activate", _open)
+        menu.append(item_dash)
+
+        menu.append(Gtk.SeparatorMenuItem())
+
+        item_refresh = Gtk.MenuItem(label="Refresh")
+        def _refresh(*_):
+            if _ref[0] and _ref[0]._win.winfo_exists():
+                root.after(0, _ref[0].refresh)
+        item_refresh.connect("activate", _refresh)
+        menu.append(item_refresh)
+
+        menu.append(Gtk.SeparatorMenuItem())
+
+        item_exit = Gtk.MenuItem(label="Exit Agent UI")
+        def _exit(*_):
+            Gtk.main_quit()
+            root.after(0, root.quit)
+        item_exit.connect("activate", _exit)
+        menu.append(item_exit)
+
+        menu.show_all()
+        menu.popup(None, None,
+                   Gtk.StatusIcon.position_menu, _icon,
+                   button, activate_time)
+
+    status_icon = Gtk.StatusIcon()
+    status_icon.set_from_pixbuf(_pil_to_pixbuf(_make_tray_icon()))
+    status_icon.set_tooltip_text("TelemetryAgent")
+    status_icon.set_visible(True)
+    status_icon.connect("activate",    _on_activate)
+    status_icon.connect("popup-menu",  _on_popup_menu)
+
+    def _update_icon():
+        try:
+            s, _ = read_local()
+            if s:
+                locked = s.get("locked", False)
+                active = s.get("active", False)
+                col = "#dc2626" if locked else ("#16a34a" if active else "#d97706")
+                status_icon.set_from_pixbuf(_pil_to_pixbuf(_make_tray_icon(col)))
+                status_icon.set_tooltip_text(_tooltip_text())
+        except Exception:
+            pass
+        return True  # keep repeating
+
+    GLib.timeout_add_seconds(10, _update_icon)
+    Gtk.main()
+
+
+def build_tray_icon(root: tk.Tk) -> pystray.Icon:
+    """
+    Build and return the pystray Icon. Does NOT call icon.run() — the caller
+    decides how to run it (run_detached() from main thread is required on Linux
+    so that pystray manages its own thread and the GTK/AppIndicator event loop
+    does not conflict with tkinter's main loop).
+    """
     _ref: list = [None]
 
     def _show():
@@ -1373,7 +1505,7 @@ def run_tray(root: tk.Tk):
                 pass
 
     threading.Thread(target=_updater, daemon=True).start()
-    icon.run()
+    return icon
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────────
@@ -1382,7 +1514,25 @@ def main():
     root = tk.Tk()
     root.withdraw()
     root.title("TelemetryAgent UI")
-    threading.Thread(target=run_tray, args=(root,), daemon=True).start()
+
+    if "MATE" in _DESKTOP:
+        # MATE: use Gtk.StatusIcon — receives click signals natively.
+        # MATE's Notification Area does not forward raw X11 ButtonPress events to
+        # embedded XEmbed windows, so pystray's xorg backend silently drops clicks.
+        try:
+            threading.Thread(
+                target=_run_gtk_status_tray,
+                args=(root,),
+                daemon=True,
+            ).start()
+        except Exception as e:
+            print(f"[warn] GTK StatusIcon failed ({e}), falling back to pystray",
+                  file=sys.stderr)
+            build_tray_icon(root).run_detached()
+    else:
+        # GNOME, KDE, Xfce, etc.: pystray AppIndicator works correctly.
+        build_tray_icon(root).run_detached()
+
     root.mainloop()
 
 
