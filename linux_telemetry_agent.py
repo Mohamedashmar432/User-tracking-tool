@@ -66,6 +66,20 @@ PID_FILE           = os.path.join(DATA_DIR,    "agent.pid")
 AUTOSTART_DIR    = os.path.join(_XDG_CONFIG, "autostart")
 SYSTEMD_USER_DIR = os.path.join(_XDG_CONFIG, "systemd", "user")
 
+# Companion UI install path — matches the `~/.local/bin/telemetry-ui` wrapper
+# created by `linux/install.sh` (and referenced in _AGENT_DESKTOP).  Centralised
+# here so the in-process UI watchdog and the install routine cannot drift.
+UI_EXE_PATH = os.path.expanduser("~/.local/bin/telemetry-ui")
+# How often the in-process UI watchdog polls (real wall-clock seconds).
+# Matches the telemetry-agent-watchdog.timer cadence (5 min) so we never
+# have two recovery mechanisms racing each other.
+UI_WATCHDOG_INTERVAL_SEC = 5 * 60
+# Process names we treat as "the UI is running".  `pkill -f` would also match
+# a developer running `python telemetry_ui.py` for debugging, which we
+# want to satisfy the watchdog (telling them "no UI is running" when they
+# are looking at one would be a false negative).
+UI_RUNNING_PATTERN = "telemetry-ui"
+
 # ── Config loading ────────────────────────────────────────────────────────────────
 def _load_config() -> dict:
     candidates = [
@@ -88,7 +102,7 @@ def _load_config() -> dict:
 _cfg = _load_config()
 
 # ── Configuration ─────────────────────────────────────────────────────────────────
-AGENT_VERSION  = "3.1"
+AGENT_VERSION  = "3.2"
 
 IDLE_THRESHOLD = _cfg.get("idle_threshold",  300)
 TICK_INTERVAL  = _cfg.get("tick_interval",     5)
@@ -753,8 +767,27 @@ def aggregate_events(events: list) -> list:
 
 # ── Batch flush ───────────────────────────────────────────────────────────────────
 def flush_batch(user: str, device: str, batch: list) -> bool:
+    """
+    POST a batch of raw events to the analytics server.
+    Returns True on success, False on any failure.
+    Buffer is NOT cleared here — caller decides based on return value.
+
+    Mirrors telemetry_agent.flush_batch() — every error path now logs to
+    stdout AND _LOG (when configured) with the same message.  The Linux
+    agent runs as a systemd --user service so console output is normally
+    discarded; without these _LOG calls the only diagnostic trail for a
+    recurring "data not arriving" complaint would be a single journalctl
+    line.  Each failure mode gets a distinct message that names the
+    exception class and includes the server URL + event count so an
+    operator can grep agent.log for the exact pattern.
+    """
     if not batch:
         return True
+    if INGEST_URL.startswith("http://") and getattr(sys, "frozen", False):
+        try:
+            _LOG.warning("Security: ingest URL uses plaintext HTTP -- telemetry data is unencrypted in transit")
+        except Exception:
+            pass
     try:
         resp = requests.post(
             INGEST_URL,
@@ -765,15 +798,73 @@ def flush_batch(user: str, device: str, batch: list) -> bool:
         )
         if resp.status_code in (200, 202):
             data = resp.json()
-            print(f"  ->Batch sent: {data.get('accepted')}/{data.get('total')} events")
+            msg = f"  ->Batch sent: {data.get('accepted')}/{data.get('total')} events"
+            print(msg)
+            try:
+                _LOG.debug("POST %s accepted=%s total=%s", INGEST_URL,
+                           data.get("accepted"), data.get("total"))
+            except Exception:
+                pass
             return True
-        print(f"  ->Server rejected [{resp.status_code}]: {resp.text[:200]}")
+        # Server replied but didn't accept.  Body is truncated to 200 chars
+        # so a runaway error page doesn't fill the log.
+        body_preview = (resp.text or "")[:200]
+        msg = f"  ->Server rejected [{resp.status_code}]: {body_preview}"
+        print(msg)
+        try:
+            _LOG.error("POST %s returned HTTP %d for %d events -- body[:200]=%r",
+                       INGEST_URL, resp.status_code, len(batch), body_preview)
+        except Exception:
+            pass
         return False
-    except requests.exceptions.ConnectionError:
-        print(f"  ->Unreachable ({INGEST_URL}). Buffering locally.")
+    except requests.exceptions.ConnectionError as e:
+        msg = f"  ->Server unreachable ({INGEST_URL}). Events buffered locally."
+        print(msg)
+        try:
+            _LOG.error("ConnectionError to %s (batch=%d events, user=%s): %s",
+                       INGEST_URL, len(batch), user, e)
+        except Exception:
+            pass
+        return False
+    except requests.exceptions.Timeout as e:
+        msg = f"  ->Server timeout after 10s ({INGEST_URL}). Events buffered locally."
+        print(msg)
+        try:
+            _LOG.error("Timeout from %s (batch=%d events, user=%s): %s",
+                       INGEST_URL, len(batch), user, e)
+        except Exception:
+            pass
+        return False
+    except requests.exceptions.SSLError as e:
+        # Distinct message: this is the most common reason agents in
+        # corporate / MITM-proxy environments fail silently.
+        msg = f"  ->SSL error contacting {INGEST_URL}: {e}"
+        print(msg)
+        try:
+            _LOG.error("SSLError to %s -- check CA bundle / corporate proxy: %s",
+                       INGEST_URL, e)
+        except Exception:
+            pass
+        return False
+    except requests.exceptions.RequestException as e:
+        msg = f"  ->HTTP error: {e}"
+        print(msg)
+        try:
+            _LOG.error("RequestException to %s (batch=%d): %s",
+                       INGEST_URL, len(batch), e)
+        except Exception:
+            pass
         return False
     except Exception as e:
-        print(f"  ->Flush error: {e}")
+        # Last-resort catch — should never fire but if it does the agent must
+        # NOT crash (it would lose its systemd user-service relationship).
+        msg = f"  ->Flush error ({type(e).__name__}): {e}"
+        print(msg)
+        try:
+            _LOG.exception("Unexpected flush error to %s (batch=%d):",
+                            INGEST_URL, len(batch))
+        except Exception:
+            pass
         return False
 
 
@@ -784,11 +875,25 @@ def _base_url() -> str:
 
 
 def _ver(v: str) -> tuple:
-    """'1.10' -> (1, 10) for correct numeric comparison."""
-    try:
-        return tuple(int(x) for x in v.strip().split("."))
-    except Exception:
+    """
+    Robust semver-ish parser.  See telemetry_agent._ver() for full rationale.
+    Handles '3.1.0-beta' -> (3, 1, 0) and None/garbage -> (0,) without raising.
+    """
+    if not v:
         return (0,)
+    out: list = []
+    for part in str(v).strip().split("."):
+        digits = ""
+        for ch in part:
+            if ch.isdigit():
+                digits += ch
+            else:
+                break
+        try:
+            out.append(int(digits) if digits else 0)
+        except Exception:
+            out.append(0)
+    return tuple(out) or (0,)
 
 
 def _do_update(download_url: str) -> None:
@@ -1192,6 +1297,15 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT,  _shutdown)
 
+    # ── Sleep gap detection thresholds ────────────────────────────────────────
+    # A "sleep gap" is any wall-clock jump > 3 ticks (default: 3*5=15 s) that
+    # could be the machine coming back from suspend.  A single missed tick
+    # is a normal scheduler hiccup, not a sleep cycle.  Multi-day gaps are
+    # capped at 24 h (86400 s) to match the startup-gap cap so a single
+    # partition can never be inflated by a long shutdown.
+    SLEEP_GAP_MIN_SEC = TICK_INTERVAL * 3
+    SLEEP_GAP_MAX_SEC = 86_400
+
     try:
         while True:
             # ── Monotonic elapsed for this tick ──────────────────────────────────
@@ -1200,20 +1314,38 @@ def main() -> None:
             _last_tick_mono = _mono_now
 
             # ── Wall-clock for sleep/resume gap detection ONLY ────────────────────
+            # time.monotonic() is frozen during suspend; time.time() jumps on resume.
+            # Negative deltas (NTP clock step backwards) are clamped to 0 — they
+            # should never be classified as a "gap" but the previous code would
+            # log a confusing "0s sleep gap captured" message.
             _wall_now   = time.time()
-            _wall_delta = _wall_now - _last_tick_wall
+            _wall_delta = max(0.0, _wall_now - _last_tick_wall)
             _last_tick_wall = _wall_now
 
-            if _wall_delta > TICK_INTERVAL * 3:
-                gap_start = datetime.fromtimestamp(
+            if _wall_delta > SLEEP_GAP_MIN_SEC:
+                # Cap the gap so a multi-day outage cannot inflate a single day
+                # to more than 86400 s of locked time.  The uncapped wall_delta
+                # is logged for diagnostics; the stored event uses the capped value.
+                _raw_gap   = int(_wall_delta)
+                _sleep_gap = min(_raw_gap, SLEEP_GAP_MAX_SEC)
+                gap_start  = datetime.fromtimestamp(
                     _wall_now - _wall_delta, tz=timezone.utc
                 ).isoformat()
                 event_buffer.append({
                     "app": "Screen Off", "domain": "", "active": False, "locked": True,
-                    "duration": int(_wall_delta), "timestamp": gap_start,
+                    "duration": _sleep_gap, "timestamp": gap_start,
                 })
-                _LOG.info("Sleep/resume gap: %ds captured", int(_wall_delta))
-                state_eng.on_sleep_gap(int(_wall_delta))
+                if _raw_gap > SLEEP_GAP_MAX_SEC:
+                    _LOG.warning(
+                        "Sleep/resume gap: %ds captured (capped from %ds)",
+                        _sleep_gap, _raw_gap,
+                    )
+                else:
+                    _LOG.info(
+                        "Sleep/resume gap: %ds of screen-off time captured (threshold=%ds)",
+                        _sleep_gap, SLEEP_GAP_MIN_SEC,
+                    )
+                state_eng.on_sleep_gap(_sleep_gap)
                 compressed = aggregate_events(event_buffer)
                 if flush_batch(username, hostname, compressed):
                     event_buffer.clear()

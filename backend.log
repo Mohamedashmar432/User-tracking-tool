@@ -1,0 +1,110 @@
+INFO:     Started server process [51224]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:     127.0.0.1:63427 - "POST /api/v1/auth/login HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:63432 - "POST /api/v1/auth/login HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:63434 - "GET /api/v1/scans/ HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:54671 - "OPTIONS /api/v1/projects HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:58754 - "OPTIONS /api/v1/scans/ HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:56000 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56000 - "GET /auth/me HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:62056 - "POST /auth/login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62056 - "GET /auth/me HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62056 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62056 - "GET /api/users HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54926 - "GET /api/groups HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54926 - "GET /api/users HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62056 - "GET /api/notifications HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54926 - "GET /api/user-data?user=e2e_user&date=2026-06-04 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54926 - "GET /api/groups HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54926 - "GET /api/user-data?user=e2e_user&date=2026-06-04 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49276 - "GET /api/users HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49276 - "GET /api/user-data?user=e2e_user&date=2026-06-04 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49276 - "GET /api/groups HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53516 - "GET /api/notifications HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51673 - "GET /install-script HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51673 - "GET /install-script HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51678 - "GET /download-agent-zip HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51678 - "GET /download-ui HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51685 - "GET /agent-config HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:51688 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51693 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51696 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51706 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52189 - "POST /ingest HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:61208 - "GET /api/users HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61208 - "GET /api/user-data?user=e2e_user&date=2026-06-04 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61208 - "GET /api/users HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61208 - "GET /api/user-data?user=e2e_user&date=2026-06-04 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61208 - "GET /api/groups HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61208 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61208 - "GET /auth/me HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61208 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61208 - "GET /api/users HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54179 - "GET /api/groups HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61208 - "GET /api/users HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54179 - "GET /api/notifications HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54179 - "GET /api/user-data?user=e2e_user&date=2026-06-04 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54179 - "GET /api/groups HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54179 - "GET /api/users HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54179 - "GET /api/user-data?user=e2e_user&date=2026-06-04 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54179 - "GET /api/users HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54179 - "GET /api/user-data?user=e2e_user&date=2026-06-04 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54179 - "GET /api/groups HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50973 - "POST /ingest HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:63129 - "GET /api/users HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63129 - "GET /api/user-data?user=e2e_user&date=2026-06-04 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63129 - "GET /api/groups HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58247 - "POST /ingest HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:58216 - "GET /api/users HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58216 - "GET /api/user-data?user=e2e_user&date=2026-06-04 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58216 - "GET /api/groups HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60834 - "POST /ingest HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:49250 - "GET /api/users HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49250 - "GET /api/user-data?user=e2e_user&date=2026-06-04 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49250 - "GET /api/groups HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52743 - "POST /ingest HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:51933 - "GET /api/users HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51933 - "GET /api/user-data?user=e2e_user&date=2026-06-04 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51933 - "GET /api/groups HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52719 - "POST /ingest HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:55897 - "GET /api/users HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55808 - "GET /api/notifications HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55897 - "GET /api/user-data?user=e2e_user&date=2026-06-04 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55897 - "GET /api/groups HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53650 - "POST /ingest HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:64692 - "GET /api/users HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64692 - "GET /api/user-data?user=e2e_user&date=2026-06-04 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64692 - "GET /api/groups HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56682 - "POST /ingest HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:53404 - "GET /api/users HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53404 - "GET /api/user-data?user=e2e_user&date=2026-06-04 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53404 - "GET /api/groups HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62770 - "POST /ingest HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:58617 - "OPTIONS /api/v1/dashboard/stats HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:51130 - "OPTIONS /api/v1/projects HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:52519 - "OPTIONS /api/v1/scans/ HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:52519 - "OPTIONS /api/v1/dashboard/stats HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:51130 - "OPTIONS /api/v1/projects HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:58617 - "OPTIONS /api/v1/scans/ HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:58617 - "OPTIONS /api/v1/dashboard/stats HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:51130 - "OPTIONS /api/v1/projects HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:58617 - "OPTIONS /api/v1/scans/ HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:58617 - "OPTIONS /api/v1/scans/ HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:58617 - "OPTIONS /api/v1/scans/ HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:58617 - "OPTIONS /api/v1/scans/ HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:58617 - "OPTIONS /api/v1/dashboard/stats HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:51130 - "OPTIONS /api/v1/projects HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:63296 - "OPTIONS /api/v1/scans/ HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:63296 - "OPTIONS /api/v1/dashboard/stats HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:51130 - "OPTIONS /api/v1/projects HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:58617 - "OPTIONS /api/v1/scans/ HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:58617 - "OPTIONS /api/v1/dashboard/stats HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:51130 - "OPTIONS /api/v1/projects HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:63296 - "OPTIONS /api/v1/scans/ HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:63296 - "OPTIONS /api/v1/auth/logout HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:63296 - "OPTIONS /api/v1/auth/login HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:50740 - "POST /ingest HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:57889 - "POST /ingest HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:61295 - "POST /ingest HTTP/1.1" 401 Unauthorized

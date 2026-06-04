@@ -1,0 +1,177 @@
+{
+  "C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\agent.config.json": {
+    "mtime": 1779774362.5265663,
+    "ast_hash": "ac7e0e69b3ae796807c635ca0ec267a5",
+    "semantic_hash": "ac7e0e69b3ae796807c635ca0ec267a5"
+  },
+  "C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\backend\\__init__.py": {
+    "mtime": 1779171297.082582,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\backend\\aggregator.py": {
+    "mtime": 1779640046.6656022,
+    "ast_hash": "b0a1b9e1a188179be45387d8dfb28cd0",
+    "semantic_hash": "b0a1b9e1a188179be45387d8dfb28cd0"
+  },
+  "C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\backend\\auth.py": {
+    "mtime": 1779171297.0849006,
+    "ast_hash": "0bd49fcd29d79dac2a913b123d91bf9c",
+    "semantic_hash": "0bd49fcd29d79dac2a913b123d91bf9c"
+  },
+  "C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\backend\\deps.py": {
+    "mtime": 1779699702.5312805,
+    "ast_hash": "4c85556811fcbd6e42b4c47e1d0cd3e7",
+    "semantic_hash": "4c85556811fcbd6e42b4c47e1d0cd3e7"
+  },
+  "C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\backend\\groups.py": {
+    "mtime": 1779171297.086347,
+    "ast_hash": "e46c0aa78fcdf50cadaa06cdcd280414",
+    "semantic_hash": "e46c0aa78fcdf50cadaa06cdcd280414"
+  },
+  "C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\backend\\main.py": {
+    "mtime": 1779640890.424371,
+    "ast_hash": "8df5316ece236f15c2a72a4982234a26",
+    "semantic_hash": "8df5316ece236f15c2a72a4982234a26"
+  },
+  "C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\backend\\routes\\__init__.py": {
+    "mtime": 1779171297.086347,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\backend\\routes\\admin.py": {
+    "mtime": 1779171297.0901906,
+    "ast_hash": "119aaa956932c41f04938cc472f15ab5",
+    "semantic_hash": "119aaa956932c41f04938cc472f15ab5"
+  },
+  "C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\backend\\routes\\analytics.py": {
+    "mtime": 1779171297.0901906,
+    "ast_hash": "2b7f09289fdb94bffd19659125338e0b",
+    "semantic_hash": "2b7f09289fdb94bffd19659125338e0b"
+  },
+  "C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\backend\\routes\\auth_routes.py": {
+    "mtime": 1779171297.092272,
+    "ast_hash": "b26c2a6c95000325db797bd3aded8bcb",
+    "semantic_hash": "b26c2a6c95000325db797bd3aded8bcb"
+  },
+  "C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\backend\\routes\\groups.py": {
+    "mtime": 1779171297.0938168,
+    "ast_hash": "64a4faec609fe046b07691603826e769",
+    "semantic_hash": "64a4faec609fe046b07691603826e769"
+  },
+  "C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\backend\\routes\\ingest.py": {
+    "mtime": 1779719393.522497,
+    "ast_hash": "d4a030051940fe43a0995eba4755ddc5",
+    "semantic_hash": "d4a030051940fe43a0995eba4755ddc5"
+  },
+  "C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\backend\\routes\\scripts.py": {
+    "mtime": 1779640906.5825272,
+    "ast_hash": "267fe2b0f08a2a7cb74a0d8c198fea8a",
+    "semantic_hash": "267fe2b0f08a2a7cb74a0d8c198fea8a"
+  },
+  "C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\backend\\storage.py": {
+    "mtime": 1779641280.47852,
+    "ast_hash": "daace6dd8c756e42b3503d8a49b3d52f",
+    "semantic_hash": "daace6dd8c756e42b3503d8a49b3d52f"
+  },
+  "C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\backend\\users.py": {
+    "mtime": 1779171297.0990021,
+    "ast_hash": "cad363b5a1256ff9781d6d10a557ac5a",
+    "semantic_hash": "cad363b5a1256ff9781d6d10a557ac5a"
+  },
+  "C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\build-all.ps1": {
+    "mtime": 1779716966.6373513,
+    "ast_hash": "ca4accf12c4b46fe73dfc60fdd7c7fe9",
+    "semantic_hash": "ca4accf12c4b46fe73dfc60fdd7c7fe9"
+  },
+  "C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\build.ps1": {
+    "mtime": 1779171297.1004224,
+    "ast_hash": "0c0b7e9944b92a28e3fc699e43c63900",
+    "semantic_hash": "0c0b7e9944b92a28e3fc699e43c63900"
+  },
+  "C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\cleanup_agent.ps1": {
+    "mtime": 1779171297.1014817,
+    "ast_hash": "8f8ebf80705d355786fdbde762cec6cb",
+    "semantic_hash": "8f8ebf80705d355786fdbde762cec6cb"
+  },
+  "C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\dev.ps1": {
+    "mtime": 1779774537.407536,
+    "ast_hash": "b5e378852e40202abd3dc4b1a90fb692",
+    "semantic_hash": "b5e378852e40202abd3dc4b1a90fb692"
+  },
+  "C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\linux\\build-deb.sh": {
+    "mtime": 1779171297.1071703,
+    "ast_hash": "879da9b3a8c59d88195f305fe72d1c8a",
+    "semantic_hash": "879da9b3a8c59d88195f305fe72d1c8a"
+  },
+  "C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\linux\\install.sh": {
+    "mtime": 1779428189.1703122,
+    "ast_hash": "b887b2dae5a2d52a95535e79b0167a26",
+    "semantic_hash": "b887b2dae5a2d52a95535e79b0167a26"
+  },
+  "C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\linux_telemetry_agent.py": {
+    "mtime": 1779719452.8016677,
+    "ast_hash": "0965f3bf7b12bb667fe4dc9c7c38d9dd",
+    "semantic_hash": "0965f3bf7b12bb667fe4dc9c7c38d9dd"
+  },
+  "C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\linux_telemetry_ui.py": {
+    "mtime": 1779701032.5026143,
+    "ast_hash": "5d7bc0b67e0e7cb96adc08d620c36416",
+    "semantic_hash": "5d7bc0b67e0e7cb96adc08d620c36416"
+  },
+  "C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\telemetry_agent.py": {
+    "mtime": 1779777267.5762804,
+    "ast_hash": "98662429919ee20917f1c7000b0168fe",
+    "semantic_hash": "98662429919ee20917f1c7000b0168fe"
+  },
+  "C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\telemetry_ui.py": {
+    "mtime": 1779699657.8120067,
+    "ast_hash": "06f50b0ddcbe770fda863494d762b3c2",
+    "semantic_hash": "06f50b0ddcbe770fda863494d762b3c2"
+  },
+  "C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\tests\\test_state_engine.py": {
+    "mtime": 1779719710.0896034,
+    "ast_hash": "65716fb47927a5de2293e4b982a2b21c",
+    "semantic_hash": "65716fb47927a5de2293e4b982a2b21c"
+  },
+  "C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\azure-pipelines.yml": {
+    "mtime": 1779171297.0815413,
+    "ast_hash": "db6dc659fd7d0fe483099490152fcdc9",
+    "semantic_hash": "db6dc659fd7d0fe483099490152fcdc9"
+  },
+  "C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\backend\\requirements.txt": {
+    "mtime": 1779171297.086347,
+    "ast_hash": "027dd124d27c6401c56554807970807b",
+    "semantic_hash": "027dd124d27c6401c56554807970807b"
+  },
+  "C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\docs\\superpowers\\plans\\2026-05-25-state-machine-activity-tracking.md": {
+    "mtime": 1779717507.7765038,
+    "ast_hash": "78b986a22438ee3659eba5f2274003b1",
+    "semantic_hash": "78b986a22438ee3659eba5f2274003b1"
+  },
+  "C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\index.html": {
+    "mtime": 1779171297.1061137,
+    "ast_hash": "1bb09637eb68583e502f434239a451b3",
+    "semantic_hash": "1bb09637eb68583e502f434239a451b3"
+  },
+  "C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\linux\\requirements-linux.txt": {
+    "mtime": 1779171297.1096835,
+    "ast_hash": "a0f0b75c066c4701b73b07236ae04019",
+    "semantic_hash": "a0f0b75c066c4701b73b07236ae04019"
+  },
+  "C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\requirements.txt": {
+    "mtime": 1779171297.114481,
+    "ast_hash": "530af2019cd9790dc2c9a628c42f8e9f",
+    "semantic_hash": "530af2019cd9790dc2c9a628c42f8e9f"
+  },
+  "C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\runtime.txt": {
+    "mtime": 1779171297.114481,
+    "ast_hash": "ecbd297fb0a6569853fb3dc71e4bcef0",
+    "semantic_hash": "ecbd297fb0a6569853fb3dc71e4bcef0"
+  },
+  "C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\version_info.txt": {
+    "mtime": 1779171297.1234648,
+    "ast_hash": "19e7a013f3bc3b5d40b6481475ebf310",
+    "semantic_hash": "19e7a013f3bc3b5d40b6481475ebf310"
+  }
+}

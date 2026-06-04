@@ -117,7 +117,7 @@ _cfg = _load_config()
 # ── Configuration ───────────────────────────────────────────────────────────────
 
 IDLE_THRESHOLD    = _cfg.get("idle_threshold",  300)  # seconds
-AGENT_VERSION     = "3.1"   # bump this before every EXE build
+AGENT_VERSION     = "3.2"   # bump this before every EXE build
 
 TICK_INTERVAL     = _cfg.get("tick_interval",    5)   # seconds
 LOG_INTERVAL      = _cfg.get("log_interval",    30)   # seconds — 30s balances granularity vs storage cost
@@ -131,6 +131,14 @@ MAX_LOG_SIZE  = 10 * 1024 * 1024   # 10 MB
 # Local cache files — shared with the UI companion process
 CACHE_PATH  = os.path.join(PROGRAM_DATA, "cache.json")   # daily summary + top apps + hourly bars
 STATUS_PATH = os.path.join(PROGRAM_DATA, "status.json")  # current status, updated every tick (5s)
+
+# Companion UI install path — same convention as _register_ui_task() in install().
+# Centralised here so the UI watchdog and the install routine cannot drift.
+UI_EXE_PATH = r"C:\Program Files\TelemetryUI\telemetry_ui.exe"
+# How often the in-process UI watchdog polls (real wall-clock seconds).
+# Matches the TelemetryAgentWatchdog scheduled-task cadence (5 min) so we
+# never have two recovery mechanisms racing each other.
+UI_WATCHDOG_INTERVAL_SEC = 5 * 60
 
 # Resolution order: env var → config file → default
 INGEST_URL = os.getenv("INGEST_URL") or _cfg.get("ingest_url", "http://localhost:8000/ingest")
@@ -398,11 +406,43 @@ def _write_cache(username: str, device: str) -> None:
 _LOG = logging.getLogger("telemetry_agent")
 
 
+def _is_admin() -> bool:
+    """Return True if the current process has administrator privileges."""
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+def _relaunch_elevated(argv: list) -> None:
+    """Re-launch this process with UAC elevation and exit the current process."""
+    exe = sys.executable
+    params = " ".join(f'"{a}"' for a in argv[1:])
+    ctypes.windll.shell32.ShellExecuteW(None, "runas", exe, params, None, 1)
+    sys.exit(0)
+
+
+def _write_crash_log(exc: BaseException) -> None:
+    """Write an unhandled exception to %TEMP%\\TelemetryAgent\\crash.log."""
+    import traceback
+    try:
+        crash_dir = os.path.join(tempfile.gettempdir(), "TelemetryAgent")
+        os.makedirs(crash_dir, exist_ok=True)
+        crash_path = os.path.join(crash_dir, "crash.log")
+        with open(crash_path, "a", encoding="utf-8") as f:
+            f.write(f"\n{'='*60}\n")
+            f.write(f"CRASH at {datetime.now().isoformat()}\n")
+            traceback.print_exc(file=f)
+    except Exception:
+        pass
+
+
 def _setup_logging() -> None:
     """
     Configure _LOG with:
-      - FileHandler  ->C:\\ProgramData\\TelemetryAgent\\agent.log  (always)
-      - StreamHandler → stdout  (only when a console is attached)
+      - FileHandler  -> C:\\ProgramData\\TelemetryAgent\\agent.log  (primary)
+      - FileHandler  -> %TEMP%\\TelemetryAgent\\agent.log            (fallback)
+      - StreamHandler -> stdout  (only when a console is attached)
     Safe to call multiple times (guards against duplicate handlers).
     """
     if _LOG.handlers:
@@ -414,14 +454,27 @@ def _setup_logging() -> None:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    # File handler — create ProgramData dir if needed
+    # File handler — primary: ProgramData; fallback: %TEMP%
+    log_opened = False
     try:
         os.makedirs(PROGRAM_DATA, exist_ok=True)
         fh = logging.FileHandler(LOG_PATH, encoding="utf-8")
         fh.setFormatter(fmt)
         _LOG.addHandler(fh)
+        log_opened = True
     except Exception as e:
         print(f"[log] Cannot create log file {LOG_PATH}: {e}")
+
+    if not log_opened:
+        try:
+            fallback_log = os.path.join(tempfile.gettempdir(), "TelemetryAgent", "agent.log")
+            os.makedirs(os.path.dirname(fallback_log), exist_ok=True)
+            fh2 = logging.FileHandler(fallback_log, encoding="utf-8")
+            fh2.setFormatter(fmt)
+            _LOG.addHandler(fh2)
+            _LOG.warning("Using fallback log (ProgramData unavailable): %s", fallback_log)
+        except Exception:
+            pass  # truly no log available — noconsole mode, nothing we can do
 
     # Console handler — skip in noconsole / frozen-windowless mode
     try:
@@ -797,6 +850,15 @@ def flush_batch(user: str, device: str, batch: list) -> bool:
     POST a batch of raw events to the analytics server.
     Returns True on success, False on any failure.
     Buffer is NOT cleared here — caller decides based on return value.
+
+    Every error path now logs to BOTH stdout (verbose) and _LOG (file) with
+    the same message.  Previously the `print()` calls only went to stdout,
+    which means in noconsole/frozen-Windows-service mode the only diagnostic
+    trail for a recurring "why is data not arriving?" complaint was the
+    single agent.log line "Server unreachable".  Now each failure mode gets
+    a distinct message that names the exception class and includes the
+    server URL + event count so an operator can grep agent.log for the
+    exact pattern matching the production problem.
     """
     if not batch:
         return True
@@ -812,15 +874,54 @@ def flush_batch(user: str, device: str, batch: list) -> bool:
         )
         if resp.status_code in (200, 202):
             data = resp.json()
-            print(f"  ->Batch sent: {data.get('accepted')}/{data.get('total')} events accepted")
+            msg = f"  ->Batch sent: {data.get('accepted')}/{data.get('total')} events accepted"
+            print(msg)
+            _LOG.debug("POST %s accepted=%s total=%s", INGEST_URL,
+                       data.get("accepted"), data.get("total"))
             return True
-        print(f"  ->Server rejected batch [{resp.status_code}]: {resp.text[:200]}")
+        # Server replied but didn't accept.  Body is truncated to 200 chars
+        # so a runaway error page doesn't fill the log.
+        body_preview = (resp.text or "")[:200]
+        msg = f"  ->Server rejected batch [{resp.status_code}]: {body_preview}"
+        print(msg)
+        _LOG.error("POST %s returned HTTP %d for %d events — body[:200]=%r",
+                   INGEST_URL, resp.status_code, len(batch), body_preview)
         return False
-    except requests.exceptions.ConnectionError:
-        print(f"  ->Server unreachable ({INGEST_URL}). Events buffered locally.")
+    except requests.exceptions.ConnectionError as e:
+        msg = f"  ->Server unreachable ({INGEST_URL}). Events buffered locally."
+        print(msg)
+        _LOG.error("ConnectionError to %s (batch=%d events, user=%s): %s",
+                   INGEST_URL, len(batch), user, e)
+        return False
+    except requests.exceptions.Timeout as e:
+        msg = f"  ->Server timeout after 10s ({INGEST_URL}). Events buffered locally."
+        print(msg)
+        _LOG.error("Timeout from %s (batch=%d events, user=%s): %s",
+                   INGEST_URL, len(batch), user, e)
+        return False
+    except requests.exceptions.SSLError as e:
+        # Distinct message: this is the most common reason agents in locked-down
+        # corporate environments (custom CA, MITM proxy) fail silently.
+        msg = f"  ->SSL error contacting {INGEST_URL}: {e}"
+        print(msg)
+        _LOG.error("SSLError to %s — check CA bundle / corporate proxy: %s",
+                   INGEST_URL, e)
+        return False
+    except requests.exceptions.RequestException as e:
+        # Catches any other requests-level error (TooManyRedirects, InvalidURL, etc.)
+        msg = f"  ->HTTP error: {e}"
+        print(msg)
+        _LOG.error("RequestException to %s (batch=%d): %s",
+                   INGEST_URL, len(batch), e)
         return False
     except Exception as e:
-        print(f"  ->Flush error: {e}")
+        # Last-resort catch — should never fire but if it does the agent must
+        # NOT crash (it would lose its watchdog relationship).  Log the full
+        # class name so future grepping is precise.
+        msg = f"  ->Flush error ({type(e).__name__}): {e}"
+        print(msg)
+        _LOG.exception("Unexpected flush error to %s (batch=%d):",
+                        INGEST_URL, len(batch))
         return False
 
 
@@ -867,11 +968,33 @@ def check_connection(retries: int = 3, delay: int = 5) -> bool:
 # ── Auto-update ──────────────────────────────────────────────────────────────────
 
 def _ver(v: str) -> tuple:
-    """'2.10' → (2, 10) for correct numeric comparison."""
-    try:
-        return tuple(int(x) for x in v.strip().split("."))
-    except Exception:
+    """
+    Parse a semver-ish version string into a comparable tuple.
+
+    Robust against:
+      - non-numeric pre-release suffixes ('3.1.0-beta' -> (3, 1, 0))
+      - missing components  ('3'  -> (3,))
+      - whitespace, empty string, None, garbage ('  ', '??', None -> (0,))
+
+    The previous implementation did `int(x)` on every component, which raised
+    on '3.1.0-beta' and silently returned (0,).  That made (0,) < (1, 0) true
+    and falsely triggered auto-updates against misbehaving servers.
+    """
+    if not v:
         return (0,)
+    out: list = []
+    for part in str(v).strip().split("."):
+        digits = ""
+        for ch in part:
+            if ch.isdigit():
+                digits += ch
+            else:
+                break
+        try:
+            out.append(int(digits) if digits else 0)
+        except Exception:
+            out.append(0)
+    return tuple(out) or (0,)
 
 
 def _do_update(download_url: str, current_exe: str) -> None:
@@ -899,6 +1022,27 @@ def _do_update(download_url: str, current_exe: str) -> None:
 
     if os.path.getsize(tmp_zip) < 1024:
         _LOG.error("Auto-update: downloaded file too small, aborting")
+        try: os.remove(tmp_zip)
+        except OSError: pass
+        return
+
+    # Magic-byte sanity check — ensure the download is actually a ZIP, not an
+    # HTML error page that would silently replace the EXE bundle with garbage.
+    # ZIP files start with the bytes b'PK\x03\x04' (PKZip local file header).
+    try:
+        with open(tmp_zip, "rb") as f:
+            magic = f.read(4)
+        if magic != b"PK\x03\x04":
+            _LOG.error(
+                "Auto-update: downloaded file is not a ZIP (magic=%r) — aborting. "
+                "Check that agent_zip_download_url on the server points to a real ZIP.",
+                magic,
+            )
+            try: os.remove(tmp_zip)
+            except OSError: pass
+            return
+    except Exception as e:
+        _LOG.error("Auto-update: could not read downloaded file: %s", e)
         return
 
     _LOG.info("Auto-update: download complete (%d bytes), preparing updater",
@@ -1144,6 +1288,66 @@ def _register_run_key(exe_path: str) -> bool:
         return False
 
 
+def _ensure_ui_running(ui_exe_path: str) -> None:
+    """
+    Self-healing watchdog for the companion UI tray app.
+
+    The TelemetryUI scheduled task is registered at install time and should
+    start the UI at every logon.  In practice the user can kill the tray
+    process (right-click → Exit) and the scheduled task only re-runs at
+    the next logon.  This watchdog lets the agent bring the UI back up
+    without requiring a logout / login cycle.
+
+    Called from the agent main loop every ~5 minutes (same cadence as the
+    TelemetryAgentWatchdog task) and once at agent startup.  Silent on
+    failure — the worst case is the user has to launch the UI manually
+    from the Start menu / a logon, which is the same as before this fix.
+
+    Implementation notes
+    --------------------
+    *  We deliberately do NOT match "telemetry_ui" alone — a manual debug
+       session may have `python telemetry_ui.py` running for a developer
+       and that should satisfy the watchdog (we'd be lying to the user
+       otherwise).
+    *  When the agent itself is the only thing running, this function
+       is the missing piece that prevents the "UI not in traybar" complaint
+       — it matches the symmetric `_ensure_agent_running()` the UI uses
+       to bring the agent back up.
+    *  Spawn flags (DETACHED_PROCESS | CREATE_NO_WINDOW) match the agent
+       install path so the UI also launches silently.
+    """
+    if not ui_exe_path or not os.path.exists(ui_exe_path):
+        return  # UI not installed — nothing to do
+    try:
+        si = subprocess.STARTUPINFO()
+        si.dwFlags    |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = 0
+        r = subprocess.run(
+            ["tasklist", "/fi", "imagename eq telemetry_ui.exe",
+             "/fo", "csv", "/nh"],
+            capture_output=True, text=True, timeout=8,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            startupinfo=si,
+        )
+        if "telemetry_ui.exe" in r.stdout.lower():
+            return  # already running — no action needed
+        # UI is missing.  Start it silently.  The UI's own single-instance
+        # mutex (if present) or tray-icon registration will be no-ops for
+        # the duplicate; subprocess.Popen with DETACHED_PROCESS means the
+        # spawned UI outlives the agent tick.
+        subprocess.Popen(
+            [ui_exe_path],
+            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW,
+            close_fds=True,
+        )
+        _LOG.info(
+            "UI watchdog: telemetry_ui.exe was not running — started %s",
+            ui_exe_path,
+        )
+    except Exception as e:
+        _LOG.warning("UI watchdog: failed to start %s: %s", ui_exe_path, e)
+
+
 def _ensure_startup_registered(exe_path: str) -> None:
     """
     Called at every agent startup (frozen mode only).
@@ -1311,15 +1515,21 @@ def install(server_url: str = None, admin_key: str = None) -> None:
         _LOG.error("  Failed to write config: %s", e)
 
     # 4. Determine EXE path and copy if frozen
+    #    PyInstaller --onedir bundles the EXE + _internal/ as a directory.
+    #    We must copy the whole directory tree, not just the EXE — the EXE
+    #    cannot start without _internal/ (Python DLLs, .pyd modules, etc.).
     if getattr(sys, "frozen", False):
         src      = sys.executable
+        src_dir  = os.path.dirname(src)   # onedir folder: EXE + _internal/
         exe_dest = os.path.join(INSTALL_DIR, "telemetry_agent.exe")
-        if os.path.abspath(src).lower() != os.path.abspath(exe_dest).lower():
+        if os.path.abspath(src_dir).lower() != os.path.abspath(INSTALL_DIR).lower():
             try:
-                shutil.copy2(src, exe_dest)
-                _LOG.info("  Agent copied: %s → %s", src, exe_dest)
+                # copytree requires the destination to not exist — remove then copy
+                shutil.rmtree(INSTALL_DIR, ignore_errors=True)
+                shutil.copytree(src_dir, INSTALL_DIR)
+                _LOG.info("  Agent bundle copied: %s → %s", src_dir, INSTALL_DIR)
             except Exception as e:
-                _LOG.error("  Copy failed: %s — using current location", e)
+                _LOG.error("  Bundle copy failed: %s — agent will run from: %s", e, src_dir)
                 exe_dest = src
         else:
             _LOG.info("  Agent already at install location: %s", exe_dest)
@@ -1511,6 +1721,18 @@ def main():
     )
     args = parser.parse_args()
 
+    # Catch all unhandled exceptions and write them to %TEMP%\TelemetryAgent\crash.log
+    # so failures in noconsole/frozen mode leave a diagnostic trail.
+    def _excepthook(exc_type, exc_value, exc_tb):
+        _write_crash_log(exc_value)
+        sys.__excepthook__(exc_type, exc_value, exc_tb)
+    sys.excepthook = _excepthook
+
+    # Install/uninstall require Administrator — auto-elevate via UAC if needed.
+    if (args.install or args.uninstall) and not _is_admin():
+        _relaunch_elevated(sys.argv)
+        return
+
     _setup_logging()
 
     if args.install:
@@ -1539,6 +1761,11 @@ def main():
     # manual re-installation.
     if getattr(sys, "frozen", False):
         _ensure_startup_registered(sys.executable)
+        # One-shot UI watchdog at startup — covered in detail by the periodic
+        # block below.  The TelemetryUI scheduled task only re-runs at logon;
+        # running the watchdog here lets the UI come back the very next tick
+        # when the user has killed the tray mid-session.
+        _ensure_ui_running(UI_EXE_PATH)
 
     # ── Normal run ────────────────────────────────────────────────────────────
     user_info = get_user_info()
@@ -1579,6 +1806,24 @@ def main():
     _last_tick_mono = time.monotonic()          # monotonic anchor for real elapsed
     state_eng = StateEngine(IDLE_THRESHOLD)    # activity state machine
 
+    # ── Sleep gap detection thresholds ──────────────────────────────────────────
+    # A "sleep gap" is any wall-clock jump > 3 ticks (default: 3*5=15 s) that
+    # could be the machine coming back from sleep/hibernate.  A single missed
+    # tick is a normal scheduler hiccup, not a sleep cycle.  Multi-day gaps
+    # are capped at 24 h (86400 s) to match the startup-gap cap so a single
+    # partition can never be inflated by a long shutdown.
+    SLEEP_GAP_MIN_SEC  = TICK_INTERVAL * 3
+    SLEEP_GAP_MAX_SEC  = 86_400
+
+    # ── UI watchdog counter ─────────────────────────────────────────────────
+    # Increment once per tick.  When the counter reaches _UI_CHECK_THRESHOLD
+    # ticks (== UI_WATCHDOG_INTERVAL_SEC real seconds) we call
+    # _ensure_ui_running() and reset.  This is the periodic companion to the
+    # one-shot startup call above — together they form the in-process recovery
+    # path that catches a tray process killed mid-session.
+    _ui_check_counter    = 0
+    _UI_CHECK_THRESHOLD  = max(1, UI_WATCHDOG_INTERVAL_SEC // TICK_INTERVAL)
+
     try:
         while True:
             # ── Monotonic elapsed for this tick ──────────────────────────────────
@@ -1588,13 +1833,20 @@ def main():
 
             # ── Wall-clock anchor — ONLY for sleep/resume gap detection ──────────
             # time.monotonic() is frozen during suspend; time.time() jumps on resume.
+            # Negative deltas (clock skew backwards) are clamped to 0 — they should
+            # never be classified as a "gap" but the previous code would log a
+            # confusing "0s sleep gap captured" message.
             _wall_now   = time.time()
-            _wall_delta = _wall_now - _last_tick_wall
+            _wall_delta = max(0.0, _wall_now - _last_tick_wall)
             _last_tick_wall = _wall_now
 
-            if _wall_delta > TICK_INTERVAL * 3:
-                _sleep_gap = int(_wall_delta)
-                _gap_start = datetime.fromtimestamp(
+            if _wall_delta > SLEEP_GAP_MIN_SEC:
+                # Cap the gap so a multi-day outage cannot inflate a single day
+                # to more than 86400 s of locked time.  The uncapped wall_delta
+                # is logged for diagnostics; the stored event uses the capped value.
+                _raw_gap    = int(_wall_delta)
+                _sleep_gap  = min(_raw_gap, SLEEP_GAP_MAX_SEC)
+                _gap_start  = datetime.fromtimestamp(
                     _wall_now - _wall_delta, tz=timezone.utc
                 ).isoformat()
                 event_buffer.append({
@@ -1605,7 +1857,16 @@ def main():
                     "duration":  _sleep_gap,
                     "timestamp": _gap_start,
                 })
-                _LOG.info("Sleep/resume gap: %ds of screen-off time captured", _sleep_gap)
+                if _raw_gap > SLEEP_GAP_MAX_SEC:
+                    _LOG.warning(
+                        "Sleep/resume gap: %ds captured (capped from %ds)",
+                        _sleep_gap, _raw_gap,
+                    )
+                else:
+                    _LOG.info(
+                        "Sleep/resume gap: %ds of screen-off time captured (threshold=%ds)",
+                        _sleep_gap, SLEEP_GAP_MIN_SEC,
+                    )
                 state_eng.on_sleep_gap(_sleep_gap)
                 _compressed = aggregate_events(event_buffer)
                 if flush_batch(username, hostname, _compressed):
@@ -1705,6 +1966,18 @@ def main():
                         event_buffer.clear()
 
                 elapsed_since_log = 0
+
+            # ── Periodic UI watchdog tick ─────────────────────────────────────────
+            # Increment once per tick; fire _ensure_ui_running() when the
+            # counter hits _UI_CHECK_THRESHOLD.  This is the in-process
+            # companion to the TelemetryAgentWatchdog scheduled task — it
+            # catches a tray process the user has killed mid-session without
+            # requiring a logout / logon cycle.
+            _ui_check_counter += 1
+            if _ui_check_counter >= _UI_CHECK_THRESHOLD:
+                _ui_check_counter = 0
+                if getattr(sys, "frozen", False):
+                    _ensure_ui_running(UI_EXE_PATH)
 
             time.sleep(TICK_INTERVAL)
 

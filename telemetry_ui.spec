@@ -17,7 +17,6 @@ a = Analysis(
     hiddenimports=[
         "PIL._tkinter_finder",
         "pystray._win32",
-        "pkg_resources.py2_warn",
     ],
     hookspath=[],
     hooksconfig={},

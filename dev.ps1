@@ -1,4 +1,4 @@
-# dev.ps1 — Start Azurite + FastAPI server for local development
+# dev.ps1 -- Start Azurite + FastAPI server for local development
 #
 # Usage:
 #   .\dev.ps1
@@ -14,7 +14,7 @@ $AzuriteJs = "C:\Users\MohamedAshmar\AppData\Roaming\npm\node_modules\azurite\di
 $Python    = Join-Path $PSScriptRoot "user-track\Scripts\python.exe"
 $WorkDir   = $PSScriptRoot
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
+# Helpers
 function Test-Port($port) {
     $c = New-Object System.Net.Sockets.TcpClient
     try { $c.Connect("127.0.0.1", $port); return $true } catch { return $false } finally { $c.Dispose() }
@@ -26,7 +26,7 @@ Write-Host "  Dev Server Launcher" -ForegroundColor Cyan
 Write-Host "======================================" -ForegroundColor Cyan
 Write-Host ""
 
-# ── 1. Azurite ─────────────────────────────────────────────────────────────────
+# 1. Azurite
 if (Test-Port 10002) {
     Write-Host "[1/2] Azurite already running on port 10002" -ForegroundColor Yellow
 } else {
@@ -59,12 +59,12 @@ if (Test-Port 10002) {
         Write-Host $script:azProc.StandardError.ReadToEnd()
         exit 1
     }
-    Write-Host "      Azurite UP (PID $($script:azProc.Id)) — ports 10000/10001/10002" -ForegroundColor Green
+    Write-Host "      Azurite UP (PID $($script:azProc.Id)) -- ports 10000/10001/10002" -ForegroundColor Green
 }
 
-# ── 2. FastAPI ─────────────────────────────────────────────────────────────────
+# 2. FastAPI
 if (Test-Port 8000) {
-    Write-Host "[2/2] Something already on port 8000 — kill it first (netstat -ano | findstr :8000)" -ForegroundColor Yellow
+    Write-Host "[2/2] Something already on port 8000 -- kill it first (netstat -ano | findstr :8000)" -ForegroundColor Yellow
     exit 0
 }
 
@@ -76,4 +76,8 @@ Write-Host ""
 
 # Run uvicorn in the foreground (--reload for live reloading)
 $env:AZURE_STORAGE_CONNECTION_STRING = "UseDevelopmentStorage=true"
+$env:AGENT_API_KEY                   = "dev-agent-key-123"
+$env:ADMIN_API_KEY                   = "dev-admin-key-123"
+$env:JWT_SECRET                      = "dev-jwt-secret-123"
+$env:ALLOWED_ORIGINS                 = "http://localhost:8000,http://127.0.0.1:8000"
 & $Python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload

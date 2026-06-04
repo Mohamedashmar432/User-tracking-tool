@@ -89,7 +89,7 @@ _SERVER_BASE  = (_cfg.get("ingest_url", "") or "").replace("/ingest", "").rstrip
 _DEVICE_KEY   = _cfg.get("api_key", "")
 _AUTO_REFRESH = 30   # seconds
 
-UI_VERSION = "3.1"
+UI_VERSION = "3.2"
 
 # ── Theme ─────────────────────────────────────────────────────────────────────────
 def _detect_dark_mode() -> bool:
@@ -165,11 +165,58 @@ def _fmt_time(secs: int) -> str:
     return f"{h}h {m}m" if h else f"{m}m"
 
 
-def _ver(v: str) -> tuple:
+def _bind_hover(button: tk.Widget, hover_fg: str, hover_bg: str | None = None) -> None:
+    """
+    Attach <Enter>/<Leave> handlers that tint the widget on hover.
+
+    Mirrors the Windows UI helper.  Tkinter's `activebackground` only fires
+    for the *pressed* state on most widgets — mouse hover alone does nothing.
+    This is a common complaint: a flat-header button looks dead until you
+    click it.  We capture the original fg/bg at bind time so theme changes
+    don't leave the widget stuck on the hover color.
+    """
     try:
-        return tuple(int(x) for x in v.strip().split("."))
+        orig_fg = button.cget("fg")
+        orig_bg = button.cget("bg")
     except Exception:
+        return
+    target_bg = hover_bg if hover_bg is not None else orig_bg
+
+    def _on_enter(_e):
+        try:
+            button.configure(fg=hover_fg, bg=target_bg)
+        except Exception:
+            pass
+
+    def _on_leave(_e):
+        try:
+            button.configure(fg=orig_fg, bg=orig_bg)
+        except Exception:
+            pass
+
+    button.bind("<Enter>", _on_enter, add="+")
+    button.bind("<Leave>", _on_leave, add="+")
+
+
+def _ver(v: str) -> tuple:
+    """
+    Robust semver-ish parser.  See telemetry_agent._ver() for full rationale.
+    """
+    if not v:
         return (0,)
+    out: list = []
+    for part in str(v).strip().split("."):
+        digits = ""
+        for ch in part:
+            if ch.isdigit():
+                digits += ch
+            else:
+                break
+        try:
+            out.append(int(digits) if digits else 0)
+        except Exception:
+            out.append(0)
+    return tuple(out) or (0,)
 
 
 # ── Self-update ───────────────────────────────────────────────────────────────────
@@ -184,7 +231,14 @@ def check_for_update() -> None:
             return
         data           = resp.json()
         server_version = data.get("version", "0")
-        download_url   = data.get("ui_zip_download_url", f"{_SERVER_BASE}/download-ui")
+        # Linux UI must read the Linux-specific download URL.
+        # Reading 'ui_zip_download_url' (the Windows key) here would cause the
+        # UI to download a Windows EXE bundle and try to execv() it on Linux,
+        # which fails silently.  Falls back to /download-linux-ui for old servers.
+        download_url   = data.get(
+            "linux_ui_download_url",
+            f"{_SERVER_BASE}/download-linux-ui",
+        )
     except Exception:
         return
     if _ver(server_version) <= _ver(UI_VERSION):
@@ -653,14 +707,22 @@ class DashboardWindow:
         self._status_lbl = tk.Label(hdr, text="Active", fg=T["TEXT"], bg=T["BG2"],
                                     font=("Sans", 11, "bold"))
         self._status_lbl.place(x=34, y=11)
-        tk.Button(hdr, text="□", fg=T["MUTED"], bg=T["BG2"], bd=0,
-                  activebackground=T["BG2"], activeforeground=T["TEXT"],
-                  font=("Sans", 13), cursor="hand2",
-                  command=self._switch_to_full).place(x=322, y=7)
-        tk.Button(hdr, text="✕", fg=T["MUTED"], bg=T["BG2"], bd=0,
-                  activebackground=T["BG2"], activeforeground=T["TEXT"],
-                  font=("Sans", 12), cursor="hand2",
-                  command=self.hide).place(x=350, y=8)
+        # ⤢ expand — a clean NORTH-EAST AND SOUTH-WEST ARROW (U+2922) that
+        # reads unambiguously as "open bigger" at every zoom level.  The
+        # previous glyph "□" was easy to mistake for an empty checkbox at
+        # small font sizes, especially on default Linux font fallbacks.
+        _expand_btn = tk.Button(hdr, text="⤢", fg=T["MUTED"], bg=T["BG2"], bd=0,
+                  activebackground=T["BG2"], activeforeground=T["BLUE"],
+                  font=("Sans", 14, "bold"), cursor="hand2",
+                  command=self._switch_to_full)
+        _expand_btn.place(x=318, y=5)
+        _bind_hover(_expand_btn, T["BLUE"])
+        _close_btn = tk.Button(hdr, text="✕", fg=T["MUTED"], bg=T["BG2"], bd=0,
+                  activebackground=T["BG2"], activeforeground=T["RED"],
+                  font=("Sans", 13, "bold"), cursor="hand2",
+                  command=self.hide)
+        _close_btn.place(x=350, y=6)
+        _bind_hover(_close_btn, T["RED"])
 
         nav = tk.Frame(w, bg=T["BG2"])
         nav.pack(fill="x")
@@ -753,10 +815,20 @@ class DashboardWindow:
                  font=("Sans", 7)).pack(side="right")
 
         tk.Frame(body, bg=T["BORDER"], height=1).pack(fill="x", padx=16, pady=8)
-        tk.Label(body, text="Top Apps", fg=T["MUTED"], bg=T["BG"],
-                 font=("Sans", 9)).pack(anchor="w", padx=16)
+        # 'Top Apps' header — kept in a frame so the separator above and the
+        # apps list below can be hidden together when there are no apps to show.
+        # Without this, a "Top Apps" label sat above an empty list, making the
+        # dashboard look broken for first-run / historical-no-data days.
+        self._top_apps_hdr = tk.Frame(body, bg=T["BG"])
+        self._top_apps_hdr.pack(fill="x", padx=16)
+        tk.Label(self._top_apps_hdr, text="Top Apps", fg=T["MUTED"], bg=T["BG"],
+                 font=("Sans", 9)).pack(anchor="w")
         self._apps_frame = tk.Frame(body, bg=T["BG"])
         self._apps_frame.pack(fill="x", padx=16, pady=(4, 0))
+        # Hidden by default — _render_apps() shows the section only when there's
+        # at least one app to display.
+        self._top_apps_hdr.pack_forget()
+        self._apps_frame.pack_forget()
 
         self._win.bind("<ButtonPress-1>", self._on_drag_start)
         self._win.bind("<B1-Motion>",     self._on_drag_move)
@@ -1284,10 +1356,34 @@ class DashboardWindow:
                                fill=T["MUTED"], font=("Sans", 8))
 
     def _render_apps(self, apps: list):
+        """
+        Render the Top Apps list.  The header and the list are hidden together
+        when `apps` is empty so the dashboard does not show a lonely
+        "Top Apps" label above a blank list.  For full mode the header is
+        always present (the section can be empty in the no-data case but the
+        column itself is always there); only the body is updated.
+        """
         T     = self.T
         frame = self._apps_frame
         for child in frame.winfo_children():
             child.destroy()
+
+        # Compact mode: hide the entire Top Apps section when there is nothing
+        # to show.  The full mode keeps the header (column structure is fixed).
+        if self._mode == "compact":
+            if not apps:
+                try:
+                    self._top_apps_hdr.pack_forget()
+                    self._apps_frame.pack_forget()
+                except Exception:
+                    pass
+                return
+            try:
+                self._top_apps_hdr.pack(fill="x", padx=16)
+                self._apps_frame.pack(fill="x", padx=16, pady=(4, 0))
+            except Exception:
+                pass
+
         for entry in apps:
             row = tk.Frame(frame, bg=T["BG"])
             row.pack(fill="x", pady=1)
@@ -1299,6 +1395,17 @@ class DashboardWindow:
                      font=("Sans", 9), anchor="w").pack(side="left", padx=4)
             tk.Label(row, text=_fmt_time(entry.get("time", 0)), fg=T["MUTED"], bg=T["BG"],
                      font=("Sans", 9)).pack(side="right")
+
+        # Safety net — if compact and now have apps, ensure both frames are packed.
+        if self._mode == "compact" and apps:
+            try:
+                self._top_apps_hdr.pack_info()
+            except Exception:
+                self._top_apps_hdr.pack(fill="x", padx=16)
+            try:
+                self._apps_frame.pack_info()
+            except Exception:
+                self._apps_frame.pack(fill="x", padx=16, pady=(4, 0))
 
     # ── Drag ──────────────────────────────────────────────────────────────────────
     def _on_drag_start(self, e):

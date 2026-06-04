@@ -1,0 +1,177 @@
+﻿pyinstaller.exe : 149 INFO: PyInstaller: 6.20.0, contrib hooks: 2026.5
+At C:\Users\MohamedAshmar\playground\User-tracking-tool\build-all.ps1:96 char:20
++             $out = & $PyInstaller --noconfirm $SpecFile 2>&1
++                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (149 INFO: PyIns...b hooks: 2026.5:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+149 INFO: Python: 3.14.5
+263 INFO: Platform: Windows-11-10.0.26200-SP0
+263 INFO: Python environment: C:\Users\MohamedAshmar\playground\User-tracking-tool\user-track
+275 INFO: Module search paths (PYTHONPATH):
+['C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Scripts\\pyinstaller.exe',
+ 'C:\\Users\\MohamedAshmar\\AppData\\Local\\Python\\pythoncore-3.14-64\\python314.zip',
+ 'C:\\Users\\MohamedAshmar\\AppData\\Local\\Python\\pythoncore-3.14-64\\DLLs',
+ 'C:\\Users\\MohamedAshmar\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib',
+ 'C:\\Users\\MohamedAshmar\\AppData\\Local\\Python\\pythoncore-3.14-64',
+ 'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track',
+ 'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages',
+ 'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\win32',
+ 'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\win32\\lib',
+ 'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\Pythonwin',
+ 'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool']
+646 INFO: Appending 'datas' from .spec
+646 INFO: checking Analysis
+646 INFO: Building Analysis because Analysis-00.toc is non existent
+646 INFO: Looking for Python shared library...
+646 INFO: Using Python shared library: C:\Users\MohamedAshmar\AppData\Local\Python\pythoncore-3.14-64\python314.dll
+646 INFO: Running Analysis Analysis-00.toc
+646 INFO: Target bytecode optimization level: 0
+646 INFO: Initializing module dependency graph...
+647 INFO: Initializing module graph hook caches...
+657 INFO: Analyzing modules for base_library.zip ...
+3568 INFO: Processing standard module hook 'hook-encodings.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\PyInstaller\\hooks'
+4174 INFO: Processing standard module hook 'hook-pickle.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\PyInstaller\\hooks'
+4455 INFO: Processing standard module hook 'hook-difflib.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\PyInstaller\\hooks'
+4502 INFO: Processing standard module hook 'hook-heapq.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\PyInstaller\\hooks'
+7235 INFO: Caching module dependency graph...
+7271 INFO: Analyzing C:\Users\MohamedAshmar\playground\User-tracking-tool\telemetry_ui.py
+7372 INFO: Processing pre-find-module-path hook 'hook-tkinter.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\PyInstaller\\hooks\\pre_find_module_path'
+7374 INFO: TclTkInfo: initializing cached Tcl/Tk info...
+7974 INFO: Processing standard module hook 'hook-_tkinter.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\PyInstaller\\hooks'
+8081 INFO: Processing standard module hook 'hook-multiprocessing.util.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\PyInstaller\\hooks'
+8151 INFO: Processing standard module hook 'hook-xml.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\PyInstaller\\hooks'
+8357 INFO: Processing standard module hook 'hook-sysconfig.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\PyInstaller\\hooks'
+8361 INFO: Processing standard module hook 'hook-_ctypes.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\PyInstaller\\hooks'
+8421 INFO: Processing standard module hook 'hook-pystray.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+9550 INFO: Processing pre-safe-import-module hook 'hook-six.moves.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+9637 INFO: Processing pre-safe-import-module hook 'hook-gi.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+C:\Users\MohamedAshmar\playground\User-tracking-tool\user-track\Lib\site-packages\pystray\_util\gtk.py:53: SyntaxWarning: 'return' in a 
+'finally' block
+  return False
+9699 INFO: Processing standard module hook 'hook-PIL.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\PyInstaller\\hooks'
+9814 INFO: Processing standard module hook 'hook-urllib3.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+9893 INFO: Processing pre-safe-import-module hook 'hook-backports.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+9894 INFO: SetuptoolsInfo: initializing cached setuptools info...
+10387 INFO: Setuptools: 'backports' appears to be a full setuptools-vendored copy - creating alias to 'setuptools._vendor.backports'!
+10392 INFO: Processing standard module hook 'hook-setuptools.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\PyInstaller\\hooks'
+10425 INFO: Processing standard module hook 'hook-platform.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\PyInstaller\\hooks'
+10427 INFO: Processing pre-safe-import-module hook 'hook-distutils.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+10449 INFO: Processing pre-safe-import-module hook 'hook-jaraco.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+10450 INFO: Setuptools: 'jaraco' appears to be a full setuptools-vendored copy - creating alias to 'setuptools._vendor.jaraco'!
+10458 INFO: Processing pre-safe-import-module hook 'hook-more_itertools.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+10458 INFO: Setuptools: 'more_itertools' appears to be a setuptools-vendored copy - creating alias to 
+'setuptools._vendor.more_itertools'!
+10560 INFO: Processing pre-safe-import-module hook 'hook-typing_extensions.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+11020 INFO: Processing pre-safe-import-module hook 'hook-packaging.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+11259 INFO: Processing standard module hook 'hook-setuptools._vendor.jaraco.text.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\PyInstaller\\hooks'
+11260 INFO: Processing pre-safe-import-module hook 'hook-importlib_resources.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+11398 INFO: Processing pre-safe-import-module hook 'hook-importlib_metadata.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+11399 INFO: Setuptools: 'importlib_metadata' appears to be a setuptools-vendored copy - creating alias to 
+'setuptools._vendor.importlib_metadata'!
+11422 INFO: Processing standard module hook 'hook-setuptools._vendor.importlib_metadata.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\PyInstaller\\hooks'
+11441 INFO: Processing pre-safe-import-module hook 'hook-zipp.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+11442 INFO: Setuptools: 'zipp' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.zipp'!
+11707 INFO: Processing pre-safe-import-module hook 'hook-tomli.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+11708 INFO: Setuptools: 'tomli' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.tomli'!
+12202 INFO: Processing pre-safe-import-module hook 'hook-wheel.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+12202 INFO: Setuptools: 'wheel' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.wheel'!
+12630 INFO: Processing standard module hook 'hook-certifi.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+12660 INFO: Processing standard module hook 'hook-charset_normalizer.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+12769 INFO: Processing standard module hook 'hook-cryptography.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+13893 INFO: hook-cryptography: cryptography does not seem to be using dynamically linked OpenSSL.
+14227 INFO: Processing standard module hook 'hook-bcrypt.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+14430 INFO: Processing standard module hook 'hook-PIL.Image.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\PyInstaller\\hooks'
+15262 INFO: Processing standard module hook 'hook-xml.etree.cElementTree.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\PyInstaller\\hooks'
+15740 INFO: Processing standard module hook 'hook-PIL.ImageFilter.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\PyInstaller\\hooks'
+16566 INFO: Analyzing hidden import 'PIL._tkinter_finder'
+16625 INFO: Processing module hooks (post-graph stage)...
+17871 INFO: Processing standard module hook 'hook-PIL.SpiderImagePlugin.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\PyInstaller\\hooks'
+18786 INFO: Processing standard module hook 'hook-_tkinter.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\PyInstaller\\hooks'
+18796 INFO: Performing binary vs. data reclassification (947 entries)
+39108 INFO: Looking for ctypes DLLs
+39170 INFO: Analyzing run-time hooks ...
+39172 INFO: Including run-time hook 'pyi_rth_inspect.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+39175 INFO: Including run-time hook 'pyi_rth_setuptools.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+39176 INFO: Including run-time hook 'pyi_rth_pkgutil.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+39179 INFO: Including run-time hook 'pyi_rth_cryptography_openssl.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\rthooks'
+39179 INFO: Including run-time hook 'pyi_rth_multiprocessing.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+39182 INFO: Including run-time hook 'pyi_rth__tkinter.py' from 
+'C:\\Users\\MohamedAshmar\\playground\\User-tracking-tool\\user-track\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+39223 INFO: Creating base_library.zip...
+39236 INFO: Looking for dynamic libraries
+40173 INFO: Extra DLL search directories (AddDllDirectory): []
+40173 INFO: Extra DLL search directories (PATH): []
+40783 INFO: Warnings written to C:\Users\MohamedAshmar\playground\User-tracking-tool\build\telemetry_ui\warn-telemetry_ui.txt
+40842 INFO: Graph cross-reference written to 
+C:\Users\MohamedAshmar\playground\User-tracking-tool\build\telemetry_ui\xref-telemetry_ui.html
+40886 INFO: checking PYZ
+40886 INFO: Building PYZ because PYZ-00.toc is non existent
+40886 INFO: Building PYZ (ZlibArchive) C:\Users\MohamedAshmar\playground\User-tracking-tool\build\telemetry_ui\PYZ-00.pyz
+41272 INFO: Building PYZ (ZlibArchive) C:\Users\MohamedAshmar\playground\User-tracking-tool\build\telemetry_ui\PYZ-00.pyz completed 
+successfully.
+41305 INFO: checking PKG
+41305 INFO: Building PKG because PKG-00.toc is non existent
+41305 INFO: Building PKG (CArchive) telemetry_ui.pkg
+41418 INFO: Building PKG (CArchive) telemetry_ui.pkg completed successfully.
+41419 INFO: Bootloader 
+C:\Users\MohamedAshmar\playground\User-tracking-tool\user-track\Lib\site-packages\PyInstaller\bootloader\Windows-64bit-intel\runw.exe
+41419 INFO: checking EXE
+41419 INFO: Building EXE because EXE-00.toc is non existent
+41419 INFO: Building EXE from EXE-00.toc
+41419 INFO: Copying bootloader EXE to C:\Users\MohamedAshmar\playground\User-tracking-tool\build\telemetry_ui\telemetry_ui.exe
+41426 INFO: Copying icon to EXE
+41515 INFO: Copying 0 resources to EXE
+41515 INFO: Embedding manifest in EXE
+41599 INFO: Appending PKG archive to EXE
+41788 INFO: Fixing EXE headers
+43151 INFO: Building EXE from EXE-00.toc completed successfully.
+43157 INFO: checking COLLECT
+43157 INFO: Building COLLECT because COLLECT-00.toc is non existent
+43157 INFO: Building COLLECT COLLECT-00.toc
+44829 INFO: Building COLLECT COLLECT-00.toc completed successfully.
+44843 INFO: Build complete! The results are available in: C:\Users\MohamedAshmar\playground\User-tracking-tool\dist
