@@ -548,9 +548,12 @@ class TelemetryStorage:
             })
         events.sort(key=lambda x: x["timestamp"])
 
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        ttl   = 120 if date == today else 1800
-        _cache.set(cache_key, events, ttl)
+        # Only cache non-empty results — empty caches poison subsequent
+        # requests when the agent sends data moments later.
+        if events:
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            ttl   = 120 if date == today else 1800
+            _cache.set(cache_key, events, ttl)
         return events
 
     def set_alias(self, username: str, alias: str) -> bool:

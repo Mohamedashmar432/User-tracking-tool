@@ -93,12 +93,16 @@ def _load_config() -> dict:
     """
     Priority order:
     1. C:\\ProgramData\\TelemetryAgent\\config.json  (production install)
-    2. agent.config.json next to this script          (local / dev)
+    2. agent.config.json next to this script / sys._MEIPASS (dev / frozen bundle)
     """
-    candidates = [
-        SYSTEM_CONFIG_PATH,
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent.config.json"),
-    ]
+    candidates = [SYSTEM_CONFIG_PATH]
+    # In a frozen --onedir build, __file__ == sys.executable so the dirname is the
+    # EXE directory, but bundled data files land in sys._MEIPASS (_internal/).
+    # In dev/script mode __file__ is the .py file, so dirname is the repo root.
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        candidates.append(os.path.join(sys._MEIPASS, "agent.config.json"))
+    else:
+        candidates.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent.config.json"))
     for path in candidates:
         try:
             with open(path, encoding="utf-8") as f:
@@ -117,7 +121,7 @@ _cfg = _load_config()
 # ── Configuration ───────────────────────────────────────────────────────────────
 
 IDLE_THRESHOLD    = _cfg.get("idle_threshold",  300)  # seconds
-AGENT_VERSION     = "3.2"   # bump this before every EXE build
+AGENT_VERSION     = "3.1"   # bump this before every EXE build
 
 TICK_INTERVAL     = _cfg.get("tick_interval",    5)   # seconds
 LOG_INTERVAL      = _cfg.get("log_interval",    30)   # seconds — 30s balances granularity vs storage cost
@@ -134,7 +138,17 @@ STATUS_PATH = os.path.join(PROGRAM_DATA, "status.json")  # current status, updat
 
 # Companion UI install path — same convention as _register_ui_task() in install().
 # Centralised here so the UI watchdog and the install routine cannot drift.
-UI_EXE_PATH = r"C:\Program Files\TelemetryUI\telemetry_ui.exe"
+# Resolved dynamically: frozen → canonical install dir, dev → same dir as this script.
+def _ui_exe_path() -> str:
+    if getattr(sys, "frozen", False):
+        return r"C:\Program Files\TelemetryUI\telemetry_ui.exe"
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    ui_py = os.path.join(script_dir, "telemetry_ui.py")
+    if os.path.exists(ui_py):
+        return ui_py
+    return r"C:\Program Files\TelemetryUI\telemetry_ui.exe"
+
+UI_EXE_PATH: str = _ui_exe_path()
 # How often the in-process UI watchdog polls (real wall-clock seconds).
 # Matches the TelemetryAgentWatchdog scheduled-task cadence (5 min) so we
 # never have two recovery mechanisms racing each other.
@@ -967,6 +981,25 @@ def check_connection(retries: int = 3, delay: int = 5) -> bool:
 
 # ── Auto-update ──────────────────────────────────────────────────────────────────
 
+# Shared file the UI reads to show/hide the "Update Available" button.
+_UPDATE_STATUS_PATH = os.path.join(PROGRAM_DATA, "update-status.json")
+
+def _write_update_status(server_version: str) -> None:
+    try:
+        os.makedirs(PROGRAM_DATA, exist_ok=True)
+        with open(_UPDATE_STATUS_PATH, "w", encoding="utf-8") as f:
+            json.dump({"update_available": True, "server_version": server_version}, f)
+    except Exception:
+        pass
+
+def _clear_update_status() -> None:
+    try:
+        if os.path.exists(_UPDATE_STATUS_PATH):
+            os.remove(_UPDATE_STATUS_PATH)
+    except Exception:
+        pass
+
+
 def _ver(v: str) -> tuple:
     """
     Parse a semver-ish version string into a comparable tuple.
@@ -1048,10 +1081,13 @@ def _do_update(download_url: str, current_exe: str) -> None:
     _LOG.info("Auto-update: download complete (%d bytes), preparing updater",
               os.path.getsize(tmp_zip))
 
-    # Hidden PowerShell updater: waits for this process to exit, then extracts
-    # the ZIP over the install directory and re-launches.
+    # Hidden PowerShell updater: waits for this process to exit, kills any other
+    # agent instance so files are not locked, extracts the ZIP, then re-launches.
     ps_lines = [
         "Start-Sleep -Seconds 3",
+        "# Kill other agent processes FIRST so files are not locked during extraction",
+        "Get-Process -Name 'telemetry_agent' -ErrorAction SilentlyContinue | Stop-Process -Force",
+        "Start-Sleep -Seconds 1",
         f"Expand-Archive -Path '{tmp_zip}' -DestinationPath '{install_dir}' -Force",
         f"Get-ChildItem -Path '{install_dir}' -Recurse | Unblock-File -ErrorAction SilentlyContinue",
         f"Remove-Item '{tmp_zip}' -Force -ErrorAction SilentlyContinue",
@@ -1075,13 +1111,12 @@ def check_for_update() -> None:
     """
     Called once at startup (frozen EXE only).
     Queries /api/health for the server version; if newer than AGENT_VERSION
-    downloads and self-replaces via _do_update().
+    writes update-status.json so the UI can show an "Update Available" button.
     Skips silently in dev mode (no sys.frozen) or on any network error.
     """
     if not getattr(sys, "frozen", False):
         return   # dev mode — never self-replace
 
-    current_exe = sys.executable
     base        = _base_url()
     health_url  = f"{base}/api/health"
 
@@ -1091,19 +1126,16 @@ def check_for_update() -> None:
             return
         data            = resp.json()
         server_version  = data.get("version", "0")
-        download_url    = data.get("agent_zip_download_url", f"{base}/download-agent-zip")
     except Exception as e:
-        _LOG.debug("Auto-update check skipped: %s", e)
+        _LOG.debug("Update check skipped: %s", e)
         return
 
     if _ver(server_version) > _ver(AGENT_VERSION):
-        _LOG.info(
-            "Auto-update: server has v%s, running v%s — updating",
-            server_version, AGENT_VERSION,
-        )
-        _do_update(download_url, current_exe)
+        _LOG.info("Update available: server v%s, running v%s", server_version, AGENT_VERSION)
+        _write_update_status(server_version)
     else:
-        _LOG.info("Auto-update: up to date (v%s)", AGENT_VERSION)
+        _clear_update_status()
+        _LOG.debug("Up to date (v%s)", AGENT_VERSION)
 
 
 def _schtasks_import_xml(task_name: str, xml: str) -> bool:
@@ -1288,7 +1320,7 @@ def _register_run_key(exe_path: str) -> bool:
         return False
 
 
-def _ensure_ui_running(ui_exe_path: str) -> None:
+def _ensure_ui_running(ui_path: str) -> None:
     """
     Self-healing watchdog for the companion UI tray app.
 
@@ -1303,49 +1335,63 @@ def _ensure_ui_running(ui_exe_path: str) -> None:
     failure — the worst case is the user has to launch the UI manually
     from the Start menu / a logon, which is the same as before this fix.
 
-    Implementation notes
-    --------------------
-    *  We deliberately do NOT match "telemetry_ui" alone — a manual debug
-       session may have `python telemetry_ui.py` running for a developer
-       and that should satisfy the watchdog (we'd be lying to the user
-       otherwise).
-    *  When the agent itself is the only thing running, this function
-       is the missing piece that prevents the "UI not in traybar" complaint
-       — it matches the symmetric `_ensure_agent_running()` the UI uses
-       to bring the agent back up.
-    *  Spawn flags (DETACHED_PROCESS | CREATE_NO_WINDOW) match the agent
-       install path so the UI also launches silently.
+    Handles both frozen EXE and dev (python script) modes transparently.
     """
-    if not ui_exe_path or not os.path.exists(ui_exe_path):
+    if not ui_path or not os.path.exists(ui_path):
         return  # UI not installed — nothing to do
     try:
-        si = subprocess.STARTUPINFO()
-        si.dwFlags    |= subprocess.STARTF_USESHOWWINDOW
-        si.wShowWindow = 0
-        r = subprocess.run(
-            ["tasklist", "/fi", "imagename eq telemetry_ui.exe",
-             "/fo", "csv", "/nh"],
-            capture_output=True, text=True, timeout=8,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-            startupinfo=si,
-        )
-        if "telemetry_ui.exe" in r.stdout.lower():
-            return  # already running — no action needed
-        # UI is missing.  Start it silently.  The UI's own single-instance
-        # mutex (if present) or tray-icon registration will be no-ops for
-        # the duplicate; subprocess.Popen with DETACHED_PROCESS means the
-        # spawned UI outlives the agent tick.
+        if _is_ui_running():
+            return
+
+        # Determine how to launch: frozen → EXE directly, dev → python script
+        if getattr(sys, "frozen", False):
+            args = [ui_path]
+        else:
+            args = [sys.executable, ui_path]
+
         subprocess.Popen(
-            [ui_exe_path],
+            args,
             creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW,
             close_fds=True,
         )
         _LOG.info(
-            "UI watchdog: telemetry_ui.exe was not running — started %s",
-            ui_exe_path,
+            "UI watchdog: %s was not running — started %s",
+            os.path.basename(ui_path), ui_path,
         )
     except Exception as e:
-        _LOG.warning("UI watchdog: failed to start %s: %s", ui_exe_path, e)
+        _LOG.warning("UI watchdog: failed to start %s: %s", ui_path, e)
+
+
+def _is_ui_running() -> bool:
+    """Check whether the telemetry UI process is currently running."""
+    frozen = getattr(sys, "frozen", False)
+    try:
+        if frozen:
+            si = subprocess.STARTUPINFO()
+            si.dwFlags    |= subprocess.STARTF_USESHOWWINDOW
+            si.wShowWindow = 0
+            r = subprocess.run(
+                ["tasklist", "/fi", "imagename eq telemetry_ui.exe",
+                 "/fo", "csv", "/nh"],
+                capture_output=True, text=True, timeout=8,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                startupinfo=si,
+            )
+            if "telemetry_ui.exe" in r.stdout.lower():
+                return True
+        else:
+            for proc in psutil.process_iter(["name", "cmdline"]):
+                try:
+                    if proc.info.get("name", "").lower() != "python.exe":
+                        continue
+                    cmdline = proc.info.get("cmdline") or []
+                    if any("telemetry_ui.py" in arg for arg in cmdline):
+                        return True
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+        return False
+    except Exception:
+        return False
 
 
 def _ensure_startup_registered(exe_path: str) -> None:
@@ -1424,7 +1470,7 @@ def _ensure_startup_registered(exe_path: str) -> None:
             _LOG.warning("Could not verify TelemetryUI task: %s", e)
 
 
-def install(server_url: str = None, admin_key: str = None) -> None:
+def install(server_url: str = None, admin_key: str = None, api_key: str = None) -> None:
     """
     Full installation routine:
       1. Create C:\\ProgramData\\TelemetryAgent and C:\\Program Files\\TelemetryAgent
@@ -1456,26 +1502,31 @@ def install(server_url: str = None, admin_key: str = None) -> None:
             _LOG.error("  Permission denied creating %s — run as Administrator", d)
             sys.exit(1)
 
-    # 2. Resolve base server URL and shared agent key from /agent-config
-    #    /agent-config now requires admin credentials — pass admin_key as X-API-Key.
+    # 2. Resolve base server URL and shared agent key.
+    #    If --api-key was supplied (injected by the server's install script), use it
+    #    directly and skip the /agent-config round-trip entirely.
+    #    Otherwise try /agent-config with an optional --admin-key for auth.
     base      = (server_url or _base_url()).rstrip("/")
-    agent_key = ""
-    try:
-        headers = {"X-API-Key": admin_key} if admin_key else {}
-        resp = requests.get(f"{base}/agent-config", headers=headers, timeout=10, verify=True)
-        if resp.ok:
-            cfg = resp.json()
-            fetched = cfg.get("server_url", "").rstrip("/")
-            if fetched:
-                _LOG.info("  /agent-config returned server_url: %s", fetched)
-                base = fetched
-            agent_key = cfg.get("agent_api_key", "")
-            if agent_key:
-                _LOG.info("  Agent API key received from /agent-config")
-        elif resp.status_code == 401:
-            _LOG.warning("  /agent-config requires --admin-key; skipping key auto-fetch")
-    except Exception as e:
-        _LOG.warning("  Could not fetch /agent-config: %s — using %s", e, base)
+    agent_key = api_key or ""
+    if not agent_key:
+        try:
+            headers = {"X-API-Key": admin_key} if admin_key else {}
+            resp = requests.get(f"{base}/agent-config", headers=headers, timeout=10, verify=True)
+            if resp.ok:
+                cfg = resp.json()
+                fetched = cfg.get("server_url", "").rstrip("/")
+                if fetched:
+                    _LOG.info("  /agent-config returned server_url: %s", fetched)
+                    base = fetched
+                agent_key = cfg.get("agent_api_key", "")
+                if agent_key:
+                    _LOG.info("  Agent API key received from /agent-config")
+            elif resp.status_code == 401:
+                _LOG.warning("  /agent-config requires --admin-key; skipping key auto-fetch")
+        except Exception as e:
+            _LOG.warning("  Could not fetch /agent-config: %s — using %s", e, base)
+    else:
+        _LOG.info("  Agent API key supplied via --api-key")
 
     # 3. Optionally register device for a per-user key (overrides the shared key)
     username = getpass.getuser()
@@ -1513,6 +1564,13 @@ def install(server_url: str = None, admin_key: str = None) -> None:
         _LOG.info("  Config written: %s", SYSTEM_CONFIG_PATH)
     except Exception as e:
         _LOG.error("  Failed to write config: %s", e)
+
+    # Update module-level globals immediately so check_connection() and any
+    # logging in this same process uses the prod URL, not the import-time default.
+    global INGEST_URL, AGENT_API_KEY
+    INGEST_URL = config["ingest_url"]
+    if agent_key:
+        AGENT_API_KEY = agent_key
 
     # 4. Determine EXE path and copy if frozen
     #    PyInstaller --onedir bundles the EXE + _internal/ as a directory.
@@ -1716,6 +1774,10 @@ def main():
         help="Admin API key — used ONCE to register this device; never stored on disk",
     )
     parser.add_argument(
+        "--api-key", metavar="KEY", default=None,
+        help="Agent ingest API key — injected by the server install script; stored in config.json",
+    )
+    parser.add_argument(
         "--uninstall", action="store_true",
         help="Remove agent: stop scheduled task, delete files and config",
     )
@@ -1736,7 +1798,7 @@ def main():
     _setup_logging()
 
     if args.install:
-        install(server_url=args.server_url, admin_key=args.admin_key)
+        install(server_url=args.server_url, admin_key=args.admin_key, api_key=args.api_key)
         return
 
     if args.uninstall:
@@ -1761,11 +1823,12 @@ def main():
     # manual re-installation.
     if getattr(sys, "frozen", False):
         _ensure_startup_registered(sys.executable)
-        # One-shot UI watchdog at startup — covered in detail by the periodic
-        # block below.  The TelemetryUI scheduled task only re-runs at logon;
-        # running the watchdog here lets the UI come back the very next tick
-        # when the user has killed the tray mid-session.
-        _ensure_ui_running(UI_EXE_PATH)
+
+    # One-shot UI watchdog at startup — covered in detail by the periodic
+    # block below.  The TelemetryUI scheduled task only re-runs at logon;
+    # running the watchdog here lets the UI come back the very next tick
+    # when the user has killed the tray mid-session.
+    _ensure_ui_running(_ui_exe_path())
 
     # ── Normal run ────────────────────────────────────────────────────────────
     user_info = get_user_info()
@@ -1823,6 +1886,13 @@ def main():
     # path that catches a tray process killed mid-session.
     _ui_check_counter    = 0
     _UI_CHECK_THRESHOLD  = max(1, UI_WATCHDOG_INTERVAL_SEC // TICK_INTERVAL)
+
+    # ── Version check counter ──────────────────────────────────────────────────
+    # Fire check_for_update() every ~30 minutes so the agent picks up a server
+    # version bump without requiring a process restart.  The old code only
+    # checked at startup, so a server upgrade mid-session was never detected.
+    _update_check_counter    = 0
+    _UPDATE_CHECK_THRESHOLD  = max(1, 1800 // TICK_INTERVAL)
 
     try:
         while True:
@@ -1976,8 +2046,16 @@ def main():
             _ui_check_counter += 1
             if _ui_check_counter >= _UI_CHECK_THRESHOLD:
                 _ui_check_counter = 0
-                if getattr(sys, "frozen", False):
-                    _ensure_ui_running(UI_EXE_PATH)
+                _ensure_ui_running(_ui_exe_path())
+
+            # ── Periodic version check ────────────────────────────────────────────
+            # Re-check the server version every ~30 minutes so a server upgrade
+            # mid-session is detected.  check_for_update() is lightweight — it
+            # just writes update-status.json so the UI can show the button.
+            _update_check_counter += 1
+            if _update_check_counter >= _UPDATE_CHECK_THRESHOLD:
+                _update_check_counter = 0
+                check_for_update()
 
             time.sleep(TICK_INTERVAL)
 

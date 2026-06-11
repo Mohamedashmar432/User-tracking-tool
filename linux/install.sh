@@ -38,12 +38,17 @@ die()     { echo -e "${RED}[error]${NC} $*" >&2; exit 1; }
 # ── Argument parsing ──────────────────────────────────────────────────────────
 ADMIN_KEY=""
 UNINSTALL=false
+# AGENT_API_KEY may be pre-injected by the server into this script at serve
+# time (see /install-script-linux route) so curl|bash installs work without
+# needing --admin-key.  It can also be passed explicitly: --api-key VALUE.
+AGENT_API_KEY="${AGENT_API_KEY:-}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --server-url)  SERVER_URL="$2"; shift 2 ;;
-        --admin-key)   ADMIN_KEY="$2";  shift 2 ;;
-        --uninstall)   UNINSTALL=true;  shift ;;
+        --server-url)  SERVER_URL="$2";      shift 2 ;;
+        --admin-key)   ADMIN_KEY="$2";       shift 2 ;;
+        --api-key)     AGENT_API_KEY="$2";   shift 2 ;;
+        --uninstall)   UNINSTALL=true;       shift ;;
         *) die "Unknown argument: $1" ;;
     esac
 done
@@ -69,9 +74,11 @@ if $UNINSTALL; then
           "$SYSTEMD_USER_DIR/telemetry-agent-watchdog.service" \
           "$SYSTEMD_USER_DIR/telemetry-agent-watchdog.timer" \
           "$BIN_DIR/telemetry-agent" \
-          "$BIN_DIR/telemetry-ui"
+          "$BIN_DIR/telemetry-ui" \
+          "$BIN_DIR/user-prod"
     rm -rf "$DATA_DIR" "$XDG_CONFIG/telemetry-agent"
     success "Uninstall complete. Cloud data is not affected."
+    info "Removed commands: telemetry-agent, telemetry-ui (alias), user-prod"
     exit 0
 fi
 
@@ -98,35 +105,16 @@ info "Python: $PYTHON ($($PYTHON --version))"
 "$PYTHON" -c "import venv" 2>/dev/null || die "Python venv module missing.\n  Debian/Ubuntu: sudo apt-get install -y python3-venv\n  Fedora/RHEL  : sudo dnf install -y python3-virtualenv"
 
 # ── Required system packages check ───────────────────────────────────────────
-# Collect every missing required package before stopping, so the user can fix
-# everything in one sudo command rather than re-running multiple times.
+# No hard-required system packages remain after the tray UI was removed.
+# python3-venv is checked directly above; all X11/AT-SPI tools are optional.
+# These arrays are intentionally empty — kept as scaffolding in case a future
+# dependency is added.  The guard below fires only if something appends to them.
 DESKTOP="${XDG_CURRENT_DESKTOP:-}"
 MISSING_REQUIRED=()
 MISSING_APT=()
 MISSING_DNF=()
 MISSING_PACMAN=()
 
-# python3-tk — required for the UI tray companion (tkinter is not pip-installable)
-if ! "$PYTHON" -c "import tkinter" &>/dev/null 2>&1; then
-    MISSING_REQUIRED+=("python3-tk (tkinter)")
-    MISSING_APT+=("python3-tk")
-    MISSING_DNF+=("python3-tkinter")
-    MISSING_PACMAN+=("tk")
-fi
-
-# AppIndicator GI bindings — required on GNOME and most non-MATE desktops for
-# the tray icon.  On MATE we use the XEmbed/xorg backend instead, so skip it.
-if [[ "${DESKTOP^^}" != *"MATE"* ]]; then
-    _HAS_INDICATOR=false
-    "$PYTHON" -c "import gi; gi.require_version('AyatanaAppIndicator3','0.1'); from gi.repository import AyatanaAppIndicator3" &>/dev/null 2>&1 && _HAS_INDICATOR=true
-    "$PYTHON" -c "import gi; gi.require_version('AppIndicator3','0.1'); from gi.repository import AppIndicator3"                   &>/dev/null 2>&1 && _HAS_INDICATOR=true
-    if ! $_HAS_INDICATOR; then
-        MISSING_REQUIRED+=("gir1.2-ayatanaappindicator3-0.1 (tray icon)")
-        MISSING_APT+=("gir1.2-ayatanaappindicator3-0.1")
-        MISSING_DNF+=("libayatana-appindicator3")
-        MISSING_PACMAN+=("libayatana-appindicator")
-    fi
-fi
 
 if [[ ${#MISSING_REQUIRED[@]} -gt 0 ]]; then
     echo ""
@@ -159,13 +147,27 @@ command -v xdotool    &>/dev/null || MISSING_OPT+=("xdotool")
 command -v xprintidle &>/dev/null || MISSING_OPT+=("xprintidle")
 command -v xprop      &>/dev/null || MISSING_OPT+=("x11-utils")   # fallback window detector
 
+# gir1.2-atspi-2.0 — AT-SPI2 accessibility bus bindings.
+# Primary window-tracking method on GNOME Wayland (works without Shell.Eval).
+# Without it, native Wayland apps (Terminal, Firefox, Files) will show as Unknown.
+if ! "$PYTHON" -c "import gi; gi.require_version('Atspi','2.0'); from gi.repository import Atspi" \
+        &>/dev/null 2>&1; then
+    MISSING_OPT+=("gir1.2-atspi-2.0")
+    warn ""
+    warn "⚠  gir1.2-atspi-2.0 is NOT installed."
+    warn "   On Wayland (Ubuntu 22.04+), app names will show as Unknown without it."
+    warn "   Fix: sudo apt install -y gir1.2-atspi-2.0"
+    warn ""
+fi
+
+
 if [[ ${#MISSING_OPT[@]} -gt 0 ]]; then
-    warn "Optional tools not installed: ${MISSING_OPT[*]}"
+    warn "Optional packages not installed: ${MISSING_OPT[*]}"
     warn "The agent will run but window-tracking accuracy is reduced without them."
     warn "Install when convenient (no re-run needed):"
     warn "  Debian/Ubuntu: sudo apt-get install -y ${MISSING_OPT[*]}"
     warn "  Fedora/RHEL  : sudo dnf install -y xdotool xprintidle xorg-x11-utils"
-    warn "  Arch         : sudo pacman -S --needed xdotool xorg-xprintidle xorg-xproputils"
+    warn "  Arch         : sudo pacman -S --needed xdotool xorg-xprintidle xorg-xproputils python-gobject"
     echo ""
 fi
 
@@ -185,18 +187,10 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 info "[1/4] Creating Python virtual environment..."
 mkdir -p "$DATA_DIR"
 
-# Use --system-site-packages so the venv can access gi.repository
-# (needed by pystray for the AppIndicator tray backend on GNOME/MATE/Xfce).
-# Without it pystray falls back to the _xorg backend, which renders the icon
-# but does not forward click events on most modern desktop environments.
-# pip-installed packages in the venv always take precedence over system ones,
-# so there is no risk of version conflicts with requests/pystray/Pillow.
+# Use --system-site-packages so the venv can access gi.repository (Wnck, Atspi)
+# for Wayland window detection without requiring extra pip packages.
 _needs_venv=false
 if [[ ! -f "$VENV_DIR/bin/python" ]]; then
-    _needs_venv=true
-elif ! grep -qi "include-system-site-packages = true" "$VENV_DIR/pyvenv.cfg" 2>/dev/null; then
-    info "Recreating venv with --system-site-packages (needed for tray icon)..."
-    rm -rf "$VENV_DIR"
     _needs_venv=true
 fi
 
@@ -225,37 +219,40 @@ fi
 # Use 'python -m pip' rather than the pip binary — works even when the
 # pip symlink is absent (another Debian quirk).
 "$VENV_PY" -m pip install --quiet --upgrade pip
-"$VENV_PY" -m pip install --quiet requests pystray Pillow
+"$VENV_PY" -m pip install --quiet requests
 success "Virtual environment ready: $VENV_DIR"
 
 # ── Step 2: Download agent + UI scripts ───────────────────────────────────────
 info "[2/4] Downloading agent scripts..."
 
-curl -fsSL "$SERVER_URL/download-linux-agent" -o "$TMP_DIR/linux_telemetry_agent.py"
-curl -fsSL "$SERVER_URL/download-linux-ui"    -o "$TMP_DIR/linux_telemetry_ui.py"
+curl -fsSL "$SERVER_URL/download-linux-agent"     -o "$TMP_DIR/linux_telemetry_agent.py"
+curl -fsSL "$SERVER_URL/download-linux-dashboard" -o "$TMP_DIR/linux_telemetry_dashboard.py"
 
 # Basic sanity check — reject suspiciously small files
-[[ $(wc -c < "$TMP_DIR/linux_telemetry_agent.py") -gt 1024 ]] || die "Downloaded agent script is too small — server error?"
-[[ $(wc -c < "$TMP_DIR/linux_telemetry_ui.py")    -gt 1024 ]] || die "Downloaded UI script is too small — server error?"
+[[ $(wc -c < "$TMP_DIR/linux_telemetry_agent.py")     -gt 1024 ]] || die "Downloaded agent script is too small — server error?"
+[[ $(wc -c < "$TMP_DIR/linux_telemetry_dashboard.py") -gt 1024 ]] || die "Downloaded dashboard script is too small — server error?"
 
 mkdir -p "$BIN_DIR"
-cp "$TMP_DIR/linux_telemetry_agent.py" "$BIN_DIR/linux_telemetry_agent.py"
-cp "$TMP_DIR/linux_telemetry_ui.py"    "$BIN_DIR/linux_telemetry_ui.py"
+cp "$TMP_DIR/linux_telemetry_agent.py"     "$BIN_DIR/linux_telemetry_agent.py"
+cp "$TMP_DIR/linux_telemetry_dashboard.py" "$BIN_DIR/linux_telemetry_dashboard.py"
 success "Scripts saved to $BIN_DIR"
 
 # ── Step 3: Create executable wrapper scripts in ~/.local/bin ─────────────────
 info "[3/4] Installing launcher wrappers..."
 AGENT_WRAPPER="$BIN_DIR/telemetry-agent"
-UI_WRAPPER="$BIN_DIR/telemetry-ui"
+UI_WRAPPER="$BIN_DIR/telemetry-ui"   # backward compat alias — points to dashboard
+USERPROD_WRAPPER="$BIN_DIR/user-prod"
 
 # Write wrapper — use printf to avoid any eval/exec confusion for EDR scanners
 printf '#!/usr/bin/env bash\nexec "%s/bin/python" "%s/linux_telemetry_agent.py" "$@"\n' \
     "$VENV_DIR" "$BIN_DIR" > "$AGENT_WRAPPER"
-printf '#!/usr/bin/env bash\nexec "%s/bin/python" "%s/linux_telemetry_ui.py" "$@"\n' \
+printf '#!/usr/bin/env bash\nexec "%s/bin/python" "%s/linux_telemetry_dashboard.py" "$@"\n' \
     "$VENV_DIR" "$BIN_DIR" > "$UI_WRAPPER"
+printf '#!/usr/bin/env bash\nexec "%s/bin/python" "%s/linux_telemetry_dashboard.py" "$@"\n' \
+    "$VENV_DIR" "$BIN_DIR" > "$USERPROD_WRAPPER"
 
-chmod 755 "$AGENT_WRAPPER" "$UI_WRAPPER"
-success "Launchers: $AGENT_WRAPPER  $UI_WRAPPER"
+chmod 755 "$AGENT_WRAPPER" "$UI_WRAPPER" "$USERPROD_WRAPPER"
+success "Launchers: $AGENT_WRAPPER  $USERPROD_WRAPPER"
 
 # Ensure ~/.local/bin is on PATH this session
 export PATH="$BIN_DIR:$PATH"
@@ -283,23 +280,10 @@ _fix_dir "$SYSTEMD_USER_DIR"
 _fix_dir "$AUTOSTART_DIR"
 
 INSTALL_ARGS=("--install" "--server-url" "$SERVER_URL")
-[[ -n "$ADMIN_KEY" ]] && INSTALL_ARGS+=("--admin-key" "$ADMIN_KEY")
+[[ -n "$ADMIN_KEY"      ]] && INSTALL_ARGS+=("--admin-key" "$ADMIN_KEY")
+[[ -n "$AGENT_API_KEY"  ]] && INSTALL_ARGS+=("--api-key"   "$AGENT_API_KEY")
 
 "$VENV_PY" "$BIN_DIR/linux_telemetry_agent.py" "${INSTALL_ARGS[@]}"
-
-# XDG autostart for the UI companion
-mkdir -p "$AUTOSTART_DIR"
-cat > "$AUTOSTART_DIR/telemetry-ui.desktop" << 'DESKTOP_EOF'
-[Desktop Entry]
-Type=Application
-Name=TelemetryAgent UI
-Hidden=false
-NoDisplay=false
-X-GNOME-Autostart-enabled=true
-Comment=Telemetry tray companion (user activity dashboard)
-DESKTOP_EOF
-# Write Exec line separately to avoid heredoc variable expansion issues
-echo "Exec=$UI_WRAPPER" >> "$AUTOSTART_DIR/telemetry-ui.desktop"
 
 # ── Start agent now — try systemd first, fall back to direct background launch ──
 # The agent MUST be running for the user to appear in the dashboard.
@@ -330,24 +314,31 @@ if ! $AGENT_STARTED; then
     fi
 fi
 
-# ── Start UI now (don't wait for next login) ──────────────────────────────────
-# Only launch if a display is available — headless/SSH installs skip this.
-if [[ -n "${DISPLAY:-}" ]] || [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
-    # Kill any stale UI instance first
-    pkill -f "linux_telemetry_ui.py" 2>/dev/null || true
-    sleep 1
-    nohup "$VENV_PY" "$BIN_DIR/linux_telemetry_ui.py" >> "$DATA_DIR/ui.log" 2>&1 &
-    UI_PID=$!
-    disown "$UI_PID" 2>/dev/null || true
-    sleep 2
-    if kill -0 "$UI_PID" 2>/dev/null; then
-        success "UI tray started (PID $UI_PID) — look for the icon in your system tray"
-    else
-        warn "UI could not start — check log: $DATA_DIR/ui.log"
-        warn "Start manually: $UI_WRAPPER"
+# ── Enable GNOME Shell window tracking on Wayland ─────────────────────────────
+# On GNOME Wayland, native apps (Terminal, Firefox, Files, etc.) are invisible
+# to xdotool and xprop because they run in Wayland mode, not XWayland.
+# org.gnome.Shell.Eval is the only way to get the focused window on Wayland —
+# but it requires development-tools to be enabled.  This is safe: the agent
+# runs as the same user and already has full access to the session.
+if command -v gsettings &>/dev/null; then
+    _SESSION="${XDG_SESSION_TYPE:-}"
+    _DESKTOP="${XDG_CURRENT_DESKTOP:-}"
+    if [[ "$_SESSION" == "wayland" ]] || [[ "${_DESKTOP^^}" == *"GNOME"* ]] || [[ "${_DESKTOP^^}" == *"UBUNTU"* ]]; then
+        # development-tools enables Shell.Eval (fallback for older GNOME)
+        gsettings set org.gnome.shell development-tools true 2>/dev/null || true
+
+        # toolkit-accessibility=true makes GTK apps (Firefox, Chrome, Files, etc.)
+        # register with AT-SPI2 so the agent can detect them on Wayland.
+        # Without this, snap-packaged apps are invisible to window tracking.
+        if gsettings set org.gnome.desktop.interface toolkit-accessibility true 2>/dev/null; then
+            success "AT-SPI accessibility enabled — all apps including Firefox will be tracked"
+        else
+            warn "Could not enable toolkit-accessibility."
+            warn "Firefox and other GTK apps may show as Unknown. Fix manually:"
+            warn "  gsettings set org.gnome.desktop.interface toolkit-accessibility true"
+            warn "  Then restart any open apps (Firefox, etc.)"
+        fi
     fi
-else
-    info "No display detected — UI skipped (will start automatically on next login)"
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────
@@ -359,6 +350,9 @@ echo ""
 echo -e "  ${BOLD}Agent log${NC}    : $DATA_DIR/agent.log"
 echo -e "  ${BOLD}Config${NC}       : $DATA_DIR/config.json"
 echo -e "  ${BOLD}Data dir${NC}     : $DATA_DIR"
+echo ""
+echo -e "  ${BOLD}Dashboard${NC}    : user-prod"
+echo -e "  ${BOLD}Quick view${NC}   : user-prod --once"
 echo ""
 echo -e "  ${BOLD}Manage the agent:${NC}"
 echo -e "    systemctl --user status  telemetry-agent"

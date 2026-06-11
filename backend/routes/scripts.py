@@ -1,33 +1,24 @@
 """
 Script delivery and file download endpoints.
 
-Most routes are public (install scripts, binary downloads).
-/agent-config is protected — it returns the agent API key and must only be
-reachable by authenticated admins running the installer.
+All routes are public (no auth required).
 """
 
 import os
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
 
-from ..auth import AGENT_KEY, require_admin
+from ..auth import AGENT_KEY
 from ..deps import _public_base
 
 router = APIRouter()
 
 
 @router.get("/agent-config")
-async def agent_config(
-    request: Request,
-    _: dict = Depends(require_admin),
-):
-    """
-    Returns server URL, ingest URL, and the shared agent API key.
-    Requires admin credentials (X-API-Key: <ADMIN_API_KEY> or JWT Bearer token).
-    Called by the agent's --install routine with the --admin-key flag.
-    """
+async def agent_config(request: Request):
+    """Called by the agent during --install to self-configure."""
     base = _public_base(request)
     return {
         "server_url":    base,
@@ -159,69 +150,6 @@ Read-Host "Press Enter to close"
     return PlainTextResponse(content=script, media_type="text/plain")
 
 
-@router.get("/install-script-linux")
-async def install_script_linux(request: Request):
-    """
-    Bash installer for Linux.  Served as a static script with SERVER_URL injected.
-    Single source of truth — linux/install.sh is the canonical copy.
-
-    curl -fsSL <server>/install-script-linux | bash
-    """
-    base = _public_base(request)
-    install_sh = Path(__file__).parent.parent.parent / "linux" / "install.sh"
-    if not install_sh.exists():
-        raise HTTPException(status_code=404,
-                            detail="linux/install.sh not found in repo")
-
-    content = install_sh.read_text(encoding="utf-8")
-
-    # Inject the server URL so `curl | bash` works without any prompt.
-    # The script uses: SERVER_URL="${SERVER_URL:-}"
-    # We replace that with: SERVER_URL="${SERVER_URL:-<actual-base-url>}"
-    content = content.replace(
-        'SERVER_URL="${SERVER_URL:-}"',
-        f'SERVER_URL="${{SERVER_URL:-{base}}}"',
-    )
-    # Normalise line endings to LF — critical for bash on all Linux flavours
-    content = content.replace("\r\n", "\n")
-    return PlainTextResponse(content=content, media_type="text/plain; charset=utf-8")
-
-
-@router.get("/download-linux-agent")
-async def download_linux_agent():
-    """Serve linux_telemetry_agent.py for curl-based installs."""
-    f = Path(__file__).parent.parent.parent / "linux_telemetry_agent.py"
-    if not f.exists():
-        raise HTTPException(status_code=404, detail="linux_telemetry_agent.py not found")
-    return PlainTextResponse(content=f.read_text(encoding="utf-8"),
-                             media_type="text/plain; charset=utf-8")
-
-
-@router.get("/download-linux-ui")
-async def download_linux_ui():
-    """Serve linux_telemetry_ui.py for curl-based installs."""
-    f = Path(__file__).parent.parent.parent / "linux_telemetry_ui.py"
-    if not f.exists():
-        raise HTTPException(status_code=404, detail="linux_telemetry_ui.py not found")
-    return PlainTextResponse(content=f.read_text(encoding="utf-8"),
-                             media_type="text/plain; charset=utf-8")
-
-
-@router.get("/download-linux-bundle")
-async def download_linux_bundle():
-    """Serve linux-telemetry-agent.zip — the pre-built script bundle for manual installs."""
-    root = Path(__file__).parent.parent.parent
-    # Prefer the pre-built zip from dist/
-    zp = root / "dist" / "linux-telemetry-agent.zip"
-    if zp.exists():
-        return FileResponse(str(zp), media_type="application/zip",
-                            filename="linux-telemetry-agent.zip")
-    raise HTTPException(
-        status_code=404,
-        detail="Linux bundle not built yet. Run: .\\build-all.ps1 -SkipWindows",
-    )
-
-
 @router.get("/uninstall-script")
 async def uninstall_script(request: Request):
     """PowerShell uninstall script."""
@@ -276,3 +204,91 @@ Write-Host ""
 Read-Host "Press Enter to close"
 """
     return PlainTextResponse(content=script, media_type="text/plain")
+
+
+@router.get("/install-script-linux")
+async def install_script_linux(request: Request):
+    """
+    Bash installer for Linux — serves linux/install.sh with SERVER_URL and
+    AGENT_API_KEY injected so `curl | bash` works with no extra flags.
+    """
+    base = _public_base(request)
+    install_sh = Path(__file__).parent.parent.parent / "linux" / "install.sh"
+    if not install_sh.exists():
+        raise HTTPException(status_code=404, detail="linux/install.sh not found in repo")
+
+    content = install_sh.read_text(encoding="utf-8")
+
+    content = content.replace(
+        'SERVER_URL="${SERVER_URL:-}"',
+        f'SERVER_URL="${{SERVER_URL:-{base}}}"',
+    )
+    # AGENT_KEY is write-only (POST /ingest) — safe to embed in the install script
+    if AGENT_KEY:
+        content = content.replace(
+            'AGENT_API_KEY="${AGENT_API_KEY:-}"',
+            f'AGENT_API_KEY="${{AGENT_API_KEY:-{AGENT_KEY}}}"',
+        )
+    content = content.replace("\r\n", "\n")
+    return PlainTextResponse(content=content, media_type="text/plain; charset=utf-8")
+
+
+@router.get("/uninstall-script-linux")
+async def uninstall_script_linux(request: Request):
+    """
+    Bash uninstaller for Linux.
+
+    curl -fsSL <server>/uninstall-script-linux | bash
+    curl -fsSL <server>/uninstall-script-linux | bash -s -- --yes
+    YES=1 curl -fsSL <server>/uninstall-script-linux | bash
+    """
+    uninstall_sh = Path(__file__).parent.parent.parent / "linux" / "uninstall.sh"
+    if not uninstall_sh.exists():
+        raise HTTPException(status_code=404, detail="linux/uninstall.sh not found in repo")
+
+    content = uninstall_sh.read_text(encoding="utf-8")
+    content = content.replace("\r\n", "\n")
+    return PlainTextResponse(content=content, media_type="text/plain; charset=utf-8")
+
+
+@router.get("/download-linux-agent")
+async def download_linux_agent():
+    """Serve linux_telemetry_agent.py for curl-based installs."""
+    f = Path(__file__).parent.parent.parent / "linux_telemetry_agent.py"
+    if not f.exists():
+        raise HTTPException(status_code=404, detail="linux_telemetry_agent.py not found")
+    return PlainTextResponse(content=f.read_text(encoding="utf-8"),
+                             media_type="text/plain; charset=utf-8")
+
+
+@router.get("/download-linux-ui")
+async def download_linux_ui():
+    """Backward-compat redirect — old agents that request the tray UI get the dashboard."""
+    return RedirectResponse(url="/download-linux-dashboard", status_code=301)
+
+
+@router.get("/download-linux-dashboard")
+async def download_linux_dashboard():
+    """
+    Serve linux_telemetry_dashboard.py for curl-based installs.
+    IMPORTANT: this file must remain pure stdlib — no pip packages.
+    """
+    f = Path(__file__).parent.parent.parent / "linux_telemetry_dashboard.py"
+    if not f.exists():
+        raise HTTPException(status_code=404, detail="linux_telemetry_dashboard.py not found")
+    return PlainTextResponse(content=f.read_text(encoding="utf-8"),
+                             media_type="text/plain; charset=utf-8")
+
+
+@router.get("/download-linux-bundle")
+async def download_linux_bundle():
+    """Serve linux-telemetry-agent.zip — pre-built script bundle for manual installs."""
+    root = Path(__file__).parent.parent.parent
+    zp = root / "dist" / "linux-telemetry-agent.zip"
+    if zp.exists():
+        return FileResponse(str(zp), media_type="application/zip",
+                            filename="linux-telemetry-agent.zip")
+    raise HTTPException(
+        status_code=404,
+        detail="Linux bundle not built yet. Run: .\\build-all.ps1 -SkipWindows",
+    )

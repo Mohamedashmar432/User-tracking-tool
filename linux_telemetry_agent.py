@@ -24,6 +24,7 @@ IPC with UI companion:
 
 import argparse
 import getpass
+import glob
 import json
 import logging
 import os
@@ -61,24 +62,13 @@ CACHE_PATH         = os.path.join(DATA_DIR,    "cache.json")
 BACKUP_DB_PATH     = os.path.join(DATA_DIR,    "backup.db")
 LOG_PATH           = os.path.join(DATA_DIR,    "agent.log")
 LAST_SEEN_PATH     = os.path.join(DATA_DIR,    "last_seen.json")
+UPDATE_STATUS_PATH = os.path.join(DATA_DIR,    "update-status.json")
+INGEST_STATUS_PATH = os.path.join(DATA_DIR,    "ingest-status.json")
 PID_FILE           = os.path.join(DATA_DIR,    "agent.pid")
 
 AUTOSTART_DIR    = os.path.join(_XDG_CONFIG, "autostart")
 SYSTEMD_USER_DIR = os.path.join(_XDG_CONFIG, "systemd", "user")
 
-# Companion UI install path — matches the `~/.local/bin/telemetry-ui` wrapper
-# created by `linux/install.sh` (and referenced in _AGENT_DESKTOP).  Centralised
-# here so the in-process UI watchdog and the install routine cannot drift.
-UI_EXE_PATH = os.path.expanduser("~/.local/bin/telemetry-ui")
-# How often the in-process UI watchdog polls (real wall-clock seconds).
-# Matches the telemetry-agent-watchdog.timer cadence (5 min) so we never
-# have two recovery mechanisms racing each other.
-UI_WATCHDOG_INTERVAL_SEC = 5 * 60
-# Process names we treat as "the UI is running".  `pkill -f` would also match
-# a developer running `python telemetry_ui.py` for debugging, which we
-# want to satisfy the watchdog (telling them "no UI is running" when they
-# are looking at one would be a false negative).
-UI_RUNNING_PATTERN = "telemetry-ui"
 
 # ── Config loading ────────────────────────────────────────────────────────────────
 def _load_config() -> dict:
@@ -102,7 +92,7 @@ def _load_config() -> dict:
 _cfg = _load_config()
 
 # ── Configuration ─────────────────────────────────────────────────────────────────
-AGENT_VERSION  = "3.2"
+AGENT_VERSION  = "3.7"
 
 IDLE_THRESHOLD = _cfg.get("idle_threshold",  300)
 TICK_INTERVAL  = _cfg.get("tick_interval",     5)
@@ -113,8 +103,34 @@ MAX_BACKUP_EVENTS = 500
 MAX_LOG_SIZE   = 10 * 1024 * 1024  # 10 MB
 
 INGEST_URL    = os.getenv("INGEST_URL") or _cfg.get("ingest_url", "http://localhost:8000/ingest")
+# Do NOT use AGENT_API_KEY directly in flush_batch or any live network call.
+# It is frozen at import time and misses config edits made after startup.
+# Use _read_api_key() instead — it re-reads config.json on every call.
 AGENT_API_KEY = (os.getenv("AGENT_API_KEY") or os.getenv("API_KEY")
                  or _cfg.get("api_key", ""))
+
+
+def _read_api_key() -> str:
+    """
+    Read the agent API key fresh on every call.
+
+    Priority: AGENT_API_KEY env → API_KEY env → config.json api_key field.
+    Reading config.json live (not the module-level constant) means a key
+    added to config.json after the agent started takes effect on the next
+    flush — no process restart required.
+    """
+    k = os.getenv("AGENT_API_KEY") or os.getenv("API_KEY")
+    if k:
+        return k
+    for path in (USER_CONFIG_PATH, SYSTEM_CONFIG_PATH):
+        try:
+            with open(path) as f:
+                v = json.load(f).get("api_key", "")
+            if v:
+                return v
+        except Exception:
+            continue
+    return AGENT_API_KEY  # fall back to value frozen at import (may be empty)
 
 BROWSER_PROCESSES = {
     "firefox", "firefox-esr", "firefox-bin",
@@ -402,9 +418,13 @@ def _detect_x11_env() -> None:
     This scans /proc/<pid>/environ for processes owned by the current user that
     have DISPLAY set (i.e. any GUI app already running), and copies those vars
     into os.environ so all subsequent X11 calls work.
+
+    Also detects WAYLAND_DISPLAY so _get_active_window_wayland() can be used
+    on Wayland sessions (Ubuntu 23.04+ defaults to Wayland).
     """
-    needed = {"DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS"}
-    if all(os.environ.get(k) for k in needed):
+    needed_x11 = {"DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS"}
+    needed_wayland = {"WAYLAND_DISPLAY", "XDG_SESSION_TYPE"}
+    if all(os.environ.get(k) for k in needed_x11):
         return  # already fully set
 
     uid = os.getuid()
@@ -424,9 +444,9 @@ def _detect_x11_env() -> None:
                         except UnicodeDecodeError:
                             continue
                         k, _, v = s.partition("=")
-                        if k in needed and k not in found and v:
+                        if (k in needed_x11 or k in needed_wayland) and k not in found and v:
                             found[k] = v
-                if len(found) == len(needed):
+                if len(found) >= len(needed_x11) + len(needed_wayland):
                     break
             except (PermissionError, FileNotFoundError, ProcessLookupError):
                 continue
@@ -435,17 +455,64 @@ def _detect_x11_env() -> None:
 
     for k, v in found.items():
         os.environ.setdefault(k, v)
-        _LOG.info("[x11-env] Detected %s=%s", k, v)
 
+    # Fallback: try loginctl to find the active session's display
     if "DISPLAY" not in os.environ:
-        _LOG.warning("[x11-env] Could not detect DISPLAY — window tracking will be unavailable")
+        try:
+            r = subprocess.run(
+                ["loginctl", "list-sessions", "--no-legend"],
+                capture_output=True, text=True, timeout=5,
+            )
+            for line in r.stdout.strip().splitlines():
+                parts = line.split()
+                if not parts:
+                    continue
+                sr = subprocess.run(
+                    ["loginctl", "show-session", parts[0], "-p", "Display"],
+                    capture_output=True, text=True, timeout=3,
+                )
+                match = re.search(r"Display=(.+)", sr.stdout)
+                if match:
+                    d = match.group(1).strip()
+                    if d:
+                        os.environ.setdefault("DISPLAY", d)
+                        break
+        except Exception:
+            pass
+
+    # ── XAUTHORITY fallback for GNOME Wayland (Mutter Xwayland auth file) ──────
+    # On Wayland + GNOME, Mutter writes the Xwayland cookie to a randomly-named
+    # file under /run/user/{uid}/ that is NEVER exported into any process's
+    # /proc/environ as XAUTHORITY.  Without it xdotool and xprop silently fail
+    # with "No protocol specified" and every window query returns empty → Unknown.
+    if not os.environ.get("XAUTHORITY"):
+        _uid = os.getuid()
+        for _pat in [
+            f"/run/user/{_uid}/.mutter-Xwaylandauth.*",
+            f"/tmp/.mutter-Xwaylandauth.*",
+            os.path.expanduser("~/.Xauthority"),
+        ]:
+            _hits = glob.glob(_pat)
+            if _hits:
+                os.environ["XAUTHORITY"] = _hits[0]
+                _LOG.info("[x11-env] XAUTHORITY set from Mutter auth file: %s", _hits[0])
+                break
+
+    if "DISPLAY" in os.environ:
+        _LOG.info("[x11-env] DISPLAY=%s XAUTHORITY=%s",
+                  os.environ["DISPLAY"], os.environ.get("XAUTHORITY", "<not set>"))
+    elif "WAYLAND_DISPLAY" in os.environ:
+        _LOG.info("[x11-env] WAYLAND_DISPLAY=%s (Wayland session detected)", os.environ["WAYLAND_DISPLAY"])
+    else:
+        _LOG.warning("[x11-env] Could not detect DISPLAY or WAYLAND_DISPLAY — window tracking may be unavailable")
 
 
 # ── Idle detection ────────────────────────────────────────────────────────────────
 def _get_idle_x11_xlib() -> int:
     """
-    Query X11 Screen Saver idle time via python-xlib (ships with pystray).
+    Query X11 Screen Saver idle time via python-xlib (optional).
     Equivalent to xprintidle without the external binary.
+    Requires: pip install python-xlib (not installed by default).
     Returns idle seconds, or -1 if unavailable.
     """
     try:
@@ -551,28 +618,184 @@ def is_session_locked() -> bool:
 
 
 # ── Active window ─────────────────────────────────────────────────────────────────
+
+_atspi_ok: bool = True   # set False after first permanent failure to stop retrying
+
+
+def _get_active_window_atspi() -> tuple:
+    """
+    Get the focused window via AT-SPI2 accessibility bus.
+
+    Works on GNOME Wayland (and X11) without Shell.Eval, without libwnck,
+    and without any DISPLAY/XAUTHORITY requirements.  AT-SPI2 is the
+    official cross-toolkit accessibility interface — apps report their
+    focused window through it regardless of display server.
+
+    Requires: gir1.2-atspi-2.0   (sudo apt install -y gir1.2-atspi-2.0)
+    Returns ("Unknown", "") silently if the package is absent or the
+    daemon is unreachable — never raises, never segfaults.
+    """
+    global _atspi_ok
+    if not _atspi_ok:
+        return "Unknown", ""
+    try:
+        import gi
+        gi.require_version("Atspi", "2.0")
+        from gi.repository import Atspi
+        Atspi.init()
+        desktop = Atspi.get_desktop(0)
+        if desktop is None:
+            return "Unknown", ""
+        for i in range(desktop.get_child_count()):
+            app = desktop.get_child_at_index(i)
+            if not app:
+                continue
+            # Only inspect the first few windows per app to stay fast
+            for j in range(min(app.get_child_count(), 8)):
+                win = app.get_child_at_index(j)
+                if not win:
+                    continue
+                try:
+                    if win.get_state_set().contains(Atspi.StateType.ACTIVE):
+                        return (app.get_name() or "Unknown"), (win.get_name() or "")
+                except Exception:
+                    continue
+    except (ImportError, ValueError):
+        # gir1.2-atspi-2.0 not installed — mark permanently unavailable
+        _atspi_ok = False
+    except Exception:
+        pass
+    return "Unknown", ""
+
+
+def _get_active_window_wayland() -> tuple:
+    """
+    Get active window via GNOME Shell D-Bus API (works on Wayland).
+
+    Uses gdbus (part of GLib, always available on GNOME/Ubuntu) to call
+    org.gnome.Shell.Eval which returns the focused window's WM_CLASS and
+    window title.  Falls back to "Unknown" on error or non-GNOME desktops.
+
+    The script returns a JSON array so the result can be parsed without
+    ast.literal_eval (which fails on D-Bus 'true'/'false' literals).
+    Shell.Eval is disabled in GNOME 42+ by default; this function returns
+    "Unknown" in that case — callers should handle the fallback.
+    """
+    desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").upper()
+    if "GNOME" not in desktop and "UBUNTU" not in desktop:
+        return "Unknown", ""
+
+    # Single JS expression returning JSON so parsing is unambiguous and
+    # avoids ast.literal_eval's inability to parse D-Bus 'true'/'false'.
+    script = (
+        "let _w=global.display.focus_window;"
+        "JSON.stringify([_w?_w.get_wm_class()||'':'',"
+        "_w?_w.get_title()||'':''])"
+    )
+    try:
+        r = subprocess.run(
+            ["gdbus", "call", "--session",
+             "--dest", "org.gnome.Shell",
+             "--object-path", "/org/gnome/Shell",
+             "--method", "org.gnome.Shell.Eval",
+             script],
+            capture_output=True, text=True, timeout=3.0,
+        )
+        out = r.stdout.strip()
+        if not out or not out.startswith("(true"):
+            return "Unknown", ""
+
+        # gdbus output: (true, '["wm_class","window title"]')
+        import json
+        m = re.search(r"'(\[.*?\])'\s*\)", out, re.DOTALL)
+        if not m:
+            return "Unknown", ""
+        arr = json.loads(m.group(1))
+        if not isinstance(arr, list) or len(arr) < 2:
+            return "Unknown", ""
+        app   = (arr[0] or "").strip() or "Unknown"
+        title = (arr[1] or "").strip()
+        return app, title
+    except Exception:
+        return "Unknown", ""
+
+
 def get_active_window() -> tuple:
     """
     Returns (app_name, window_title).
 
     Detection chain (works across Ubuntu, MATE, Xfce, Openbox, KDE, etc.):
-      1. xdotool  — preferred; needs xdotool installed
-      2. xprop    — standard X11 tool present on all distros with x11-utils/xorg-x11-utils
-      3. /proc/<pid>/comm — pure-Python last resort using _NET_WM_PID
+      Wayland sessions:
+        0a. AT-SPI2 (gir1.2-atspi-2.0) — Wayland-native, no Shell.Eval needed
+        0b. GNOME Shell D-Bus Eval (disabled by default in GNOME 45+)
+        0c. /proc/<pid>/comm via XWayland _NET_WM_PID (pure-Python, no C libs)
+        0d. xdotool / xprop (XWayland-only catch-all)
+      X11 sessions:
+        1.  xdotool
+        2.  xprop _NET_ACTIVE_WINDOW
+        3.  /proc/<pid>/comm via _NET_WM_PID (pure-Python, no binary deps)
     """
+    # Ensure XAUTHORITY is set — on GNOME Wayland it's a randomly-named Mutter
+    # auth file that _detect_x11_env() finds via glob.  Without it xdotool and
+    # xprop silently return empty even when DISPLAY is correctly set.
+    if not os.environ.get("XAUTHORITY"):
+        _detect_x11_env()
+
+    # ── Method 0: Wayland — native detection before X11 tools ───────────────
+    # xdotool and xprop only see XWayland apps on a Wayland session; native
+    # Wayland apps (Firefox, GNOME Terminal, etc.) are invisible to them.
+    if os.environ.get("WAYLAND_DISPLAY"):
+        # 0a. AT-SPI2 — works on GNOME Wayland without Shell.Eval or any display
+        #     vars.  Requires gir1.2-atspi-2.0; skips silently if absent.
+        app, title = _get_active_window_atspi()
+        if app != "Unknown":
+            return app, title
+        # 0b. GNOME Shell D-Bus (requires Shell.Eval; disabled in GNOME 45+)
+        app, title = _get_active_window_wayland()
+        if app != "Unknown":
+            return app, title
+        # 0c. /proc/<pid>/comm via XWayland _NET_WM_PID — pure-Python, no C libs
+        app, title = _get_active_window_proc()
+        if app != "Unknown":
+            return app, title
+        # Fall through to xdotool/xprop as final catch-all.
+
     # ── Method 1: xdotool ─────────────────────────────────────────────────────
-    win_id = _run(["xdotool", "getactivewindow"])
+    # On GNOME Wayland, `getactivewindow` reads _NET_ACTIVE_WINDOW (EWMH) which
+    # GNOME does NOT update for XWayland windows → always returns empty.
+    # `getwindowfocus` reads X11 GetInputFocus which GNOME Wayland DOES forward
+    # to XWayland when an XWayland app has focus → returns the correct window.
+    # Try getwindowfocus first, fall back to getactivewindow for X11 desktops
+    # where getwindowfocus may return the root window or a phantom window.
+    win_id = _run(["xdotool", "getwindowfocus"])
+    if not win_id or win_id == "1":   # "1" is the root window — not useful
+        win_id = _run(["xdotool", "getactivewindow"])
     if win_id:
         title    = _run(["xdotool", "getwindowname",    win_id])
         wm_class = _run(["xdotool", "getwindowclassname", win_id])
-        app = wm_class if wm_class else (title.split()[-1] if title else "Unknown")
+        app = wm_class
+        if not app:
+            # Fall back: read process name from /proc via getwindowpid
+            pid_str = _run(["xdotool", "getwindowpid", win_id])
+            if pid_str and pid_str.isdigit():
+                try:
+                    with open(f"/proc/{pid_str}/comm", "rb") as f:
+                        app = f.read().decode(errors="replace").strip()
+                except Exception:
+                    app = ""
+            if not app:
+                app = title.split()[-1] if title else "Unknown"
         return app, title
 
     # ── Method 2: xprop _NET_ACTIVE_WINDOW (EWMH — all modern WMs) ───────────
     root_out = _run(["xprop", "-root", "_NET_ACTIVE_WINDOW"], timeout=2.0)
-    m = re.search(r"0x([0-9a-fA-F]+)", root_out)
-    if m:
-        win_hex  = "0x" + m.group(1)
+    # `0x0` is the EWMH "no focused window" sentinel — must be skipped or
+    # the second xprop call below will print `Invalid window id format: 0x0.`
+    m = re.search(r"_NET_ACTIVE_WINDOW\(WINDOW\)\s*:\s*window id #\s*(0x[0-9a-fA-F]+)", root_out)
+    if not m:
+        m = re.search(r"window id #\s*(0x[0-9a-fA-F]+)", root_out)
+    if m and m.group(1).lower() != "0x0":
+        win_hex  = m.group(1)
         xp = _run(["xprop", "-id", win_hex,
                    "_NET_WM_NAME", "WM_NAME", "WM_CLASS", "_NET_WM_PID"], timeout=2.0)
 
@@ -603,6 +826,69 @@ def get_active_window() -> tuple:
         if app or title:
             return (app or title.split()[-1] or "Unknown"), title
 
+    # ── Method 3: /proc via XWayland _NET_WM_PID (pure-Python, no binary deps)
+    # Last resort — reads process name from /proc without any C library call.
+    # Safe on Wayland: no GDK/X11 init, no segfault risk.
+    app, title = _get_active_window_proc()
+    if app != "Unknown":
+        return app, title
+
+    return "Unknown", ""
+
+
+def _get_active_window_proc() -> tuple:
+    """
+    Last-resort fallback for Wayland: read the PID of the currently
+    focused window from the XWayland root window, then look up the
+    process name in /proc/<pid>/comm.
+
+    On a pure Wayland session this cannot see native Wayland apps, but
+    it DOES catch every XWayland app (Firefox, Chrome, most Electron
+    apps) when the GNOME Shell Eval D-Bus method is blocked.
+
+    Returns ("Unknown", "") when no PID can be resolved.
+    """
+    if not os.environ.get("DISPLAY"):
+        return "Unknown", ""
+    try:
+        # _NET_ACTIVE_WINDOW is on the XWayland root window
+        r = subprocess.run(
+            ["xprop", "-root", "_NET_ACTIVE_WINDOW"],
+            capture_output=True, text=True, timeout=2.0,
+        )
+        # xprop output looks like:  _NET_ACTIVE_WINDOW(WINDOW): window id # 0x56001234
+        # On Wayland with no focus it returns:  _NET_ACTIVE_WINDOW(WINDOW): window id # 0x0
+        # 0x0 means "no active window" — must be skipped (second xprop would
+        # print "Invalid window id format: 0x0." and we'd learn nothing).
+        m = re.search(r"window id #\s*(0x[0-9a-fA-F]+)", r.stdout)
+        if not m or m.group(1).lower() == "0x0":
+            return "Unknown", ""
+        win_hex = m.group(1)
+        rp = subprocess.run(
+            ["xprop", "-id", win_hex, "_NET_WM_PID"],
+            capture_output=True, text=True, timeout=2.0,
+        )
+        p = re.search(r"_NET_WM_PID\([^)]+\)\s*=\s*(\d+)", rp.stdout)
+        if not p:
+            return "Unknown", ""
+        pid = p.group(1)
+        with open(f"/proc/{pid}/comm", "rb") as f:
+            app = f.read().decode(errors="replace").strip()
+        # Pull the window title for domain extraction
+        rt = subprocess.run(
+            ["xprop", "-id", win_hex, "_NET_WM_NAME", "WM_NAME"],
+            capture_output=True, text=True, timeout=2.0,
+        )
+        title = ""
+        tm = re.search(r'_NET_WM_NAME\([^)]+\)\s*=\s*"(.+?)"', rt.stdout)
+        if not tm:
+            tm = re.search(r'WM_NAME\([^)]+\)\s*=\s*"(.+?)"', rt.stdout)
+        if tm:
+            title = tm.group(1)
+        if app:
+            return app, title
+    except Exception:
+        pass
     return "Unknown", ""
 
 
@@ -668,7 +954,7 @@ def save_to_backup(username: str, device: str, events: list) -> None:
                 break
             conn.execute("DELETE FROM offline_batches WHERE id=?", (row_id,))
             total -= count
-            print(f"  [backup] Evicted batch id={row_id}")
+            _LOG.info("[backup] Evicted batch id=%s", row_id)
         conn.execute(
             "INSERT INTO offline_batches "
             "(created_at, user, device, events_json, event_count) VALUES (?,?,?,?,?)",
@@ -677,9 +963,9 @@ def save_to_backup(username: str, device: str, events: list) -> None:
         )
         conn.commit()
         conn.close()
-        print(f"  [backup] {len(events)} events saved offline -> {BACKUP_DB_PATH}")
+        _LOG.info("[backup] %d events saved offline -> %s", len(events), BACKUP_DB_PATH)
     except Exception as e:
-        print(f"  [backup] DB write failed: {e}")
+        _LOG.error("[backup] DB write failed: %s", e)
 
 
 def flush_backup(username: str, device: str) -> int:
@@ -698,14 +984,14 @@ def flush_backup(username: str, device: str) -> int:
                 conn.execute("DELETE FROM offline_batches WHERE id=?", (row_id,))
                 conn.commit()
                 recovered += len(events)
-                print(f"  [backup] Recovered {len(events)} events (id={row_id})")
+                _LOG.info("[backup] Recovered %d events (id=%s)", len(events), row_id)
             else:
                 break
         conn.close()
     except Exception as e:
-        print(f"  [backup] DB replay failed: {e}")
+        _LOG.error("[backup] DB replay failed: %s", e)
     if recovered:
-        print(f"  [backup] Total recovered: {recovered} events")
+        _LOG.info("[backup] Total recovered: %d events", recovered)
     return recovered
 
 
@@ -783,16 +1069,14 @@ def flush_batch(user: str, device: str, batch: list) -> bool:
     """
     if not batch:
         return True
-    if INGEST_URL.startswith("http://") and getattr(sys, "frozen", False):
-        try:
-            _LOG.warning("Security: ingest URL uses plaintext HTTP -- telemetry data is unencrypted in transit")
-        except Exception:
-            pass
+    if INGEST_URL.startswith("http://"):
+        _LOG.warning("Security: ingest URL uses plaintext HTTP -- telemetry data is unencrypted in transit")
+    api_key = _read_api_key()
     try:
         resp = requests.post(
             INGEST_URL,
             json={"user": user, "device": device, "events": batch},
-            headers={"X-API-Key": AGENT_API_KEY},
+            headers={"X-API-Key": api_key},
             timeout=10,
             verify=True,
         )
@@ -801,11 +1085,29 @@ def flush_batch(user: str, device: str, batch: list) -> bool:
             msg = f"  ->Batch sent: {data.get('accepted')}/{data.get('total')} events"
             print(msg)
             try:
-                _LOG.debug("POST %s accepted=%s total=%s", INGEST_URL,
-                           data.get("accepted"), data.get("total"))
+                _LOG.info("POST %s accepted=%s total=%s", INGEST_URL,
+                          data.get("accepted"), data.get("total"))
+                # Write ingest-status.json so the terminal dashboard can show
+                # "last successful ingest" without querying the server.
+                with open(INGEST_STATUS_PATH, "w") as _sf:
+                    json.dump({
+                        "last_success":  datetime.now(timezone.utc).isoformat(),
+                        "events_sent":   data.get("accepted", len(batch)),
+                    }, _sf)
             except Exception:
                 pass
             return True
+        # 401 deserves a distinct, actionable message — it always means the
+        # api_key in config.json doesn't match the server's AGENT_API_KEY env var.
+        if resp.status_code == 401:
+            _LOG.error(
+                "AUTH FAILED (HTTP 401) posting to %s — "
+                "the api_key in %s does not match the server's AGENT_API_KEY. "
+                "Edit config.json, save, and the next flush will pick it up automatically.",
+                INGEST_URL, USER_CONFIG_PATH,
+            )
+            print(f"  ->AUTH FAILED (401): check api_key in {USER_CONFIG_PATH}")
+            return False
         # Server replied but didn't accept.  Body is truncated to 200 chars
         # so a runaway error page doesn't fill the log.
         body_preview = (resp.text or "")[:200]
@@ -896,79 +1198,29 @@ def _ver(v: str) -> tuple:
     return tuple(out) or (0,)
 
 
-def _do_update(download_url: str) -> None:
-    """
-    Download new linux_telemetry_agent.py, replace this file atomically,
-    then re-exec so the new version takes over this process slot.
+# ── Auto-update (detection only — UI performs the actual download) ────────────────
 
-    Strategy
-    --------
-    1. Download to <script>.new  — keeps the running script intact on failure.
-    2. Sanity-check size         — reject suspiciously small payloads.
-    3. os.replace()              — atomic rename; never leaves a half-written file.
-    4. os.execv()                — replace this process image in-place; PID stays
-                                   the same so systemd keeps tracking it correctly.
-    """
-    current = os.path.abspath(__file__)
-    tmp     = current + ".new"
-
-    _LOG.info("Auto-update: downloading from %s", download_url)
+def _write_update_status(server_version: str) -> None:
     try:
-        with requests.get(download_url, timeout=60, verify=True) as r:
-            r.raise_for_status()
-            with open(tmp, "w", encoding="utf-8") as f:
-                f.write(r.text)
-    except Exception as e:
-        _LOG.error("Auto-update: download failed -- %s", e)
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
-        return
-
-    if os.path.getsize(tmp) < 1024:
-        _LOG.error("Auto-update: downloaded file too small, aborting")
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
-        return
-
-    # Preserve executable permission bits from the current script
-    try:
-        import stat as _stat
-        mode = os.stat(current).st_mode | _stat.S_IEXEC | _stat.S_IXGRP | _stat.S_IXOTH
-        os.chmod(tmp, mode)
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(UPDATE_STATUS_PATH, "w", encoding="utf-8") as f:
+            json.dump({"update_available": True, "server_version": server_version}, f)
     except Exception:
         pass
 
-    # Atomic replace (POSIX rename semantics -- safe on Linux)
+def _clear_update_status() -> None:
     try:
-        os.replace(tmp, current)
-    except Exception as e:
-        _LOG.error("Auto-update: could not replace script -- %s", e)
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
-        return
-
-    _LOG.info("Auto-update: script replaced -- restarting via execv")
-
-    # Re-exec: replace this process image with the updated script.
-    # os.execv() never returns on success; on failure we log and continue
-    # running the old in-memory bytecode until the next restart.
-    try:
-        os.execv(sys.executable, [sys.executable, current] + sys.argv[1:])
-    except Exception as e:
-        _LOG.error("Auto-update: re-exec failed -- %s  (restart manually)", e)
+        if os.path.exists(UPDATE_STATUS_PATH):
+            os.remove(UPDATE_STATUS_PATH)
+    except Exception:
+        pass
 
 
 def check_for_update() -> None:
     """
-    Called once at startup.  Queries /api/health; if the server reports a
-    newer version, downloads and self-replaces via _do_update().
-    Skips silently on any network error.
+    Detection-only.  Queries /api/health; if the server reports a
+    newer version, writes update-status.json so the UI can show an
+    "Update Available" button.  Skips silently on any network error.
     """
     base       = _base_url()
     health_url = f"{base}/api/health"
@@ -979,23 +1231,15 @@ def check_for_update() -> None:
             return
         data           = resp.json()
         server_version = data.get("version", "0")
-        download_url   = data.get(
-            "linux_agent_download_url",
-            f"{base}/download-linux-agent",
-        )
     except Exception as e:
-        _LOG.debug("Auto-update check skipped: %s", e)
+        _LOG.debug("Update check skipped: %s", e)
         return
 
-    if _ver(server_version) <= _ver(AGENT_VERSION):
-        _LOG.info("Auto-update: up to date (v%s)", AGENT_VERSION)
-        return
-
-    _LOG.info(
-        "Auto-update: server has v%s, running v%s -- updating",
-        server_version, AGENT_VERSION,
-    )
-    _do_update(download_url)
+    if _ver(server_version) > _ver(AGENT_VERSION):
+        _LOG.info("Update available: server v%s, running v%s", server_version, AGENT_VERSION)
+        _write_update_status(server_version)
+    else:
+        _clear_update_status()
 
 
 def check_connection(retries: int = 3, delay: int = 5, base_url: str = None) -> bool:
@@ -1093,17 +1337,21 @@ Comment=User activity telemetry agent (background)
 
 
 # ── Install / Uninstall ───────────────────────────────────────────────────────────
-def install(server_url: str = None, admin_key: str = None) -> None:
+def install(server_url: str = None, admin_key: str = None,
+            api_key: str = None) -> None:
     _LOG.info("=== Telemetry Agent Installation (Linux) ===")
 
     os.makedirs(DATA_DIR, exist_ok=True)
     _LOG.info("  Directory ready: %s", DATA_DIR)
 
     base      = (server_url or _base_url()).rstrip("/")
-    agent_key = ""
+    # Seed from --api-key (injected by the server into the install script at
+    # serve time).  /agent-config may override this with a per-device key when
+    # --admin-key is also provided.
+    agent_key = api_key or ""
     try:
         # /agent-config requires admin credentials — pass admin_key as X-API-Key.
-        # Without it the server returns 401 and we fall back to manual key entry.
+        # Without it the server returns 401 and we keep the injected api_key.
         headers = {"X-API-Key": admin_key} if admin_key else {}
         resp = requests.get(f"{base}/agent-config", headers=headers, timeout=10, verify=True)
         if resp.ok:
@@ -1111,11 +1359,15 @@ def install(server_url: str = None, admin_key: str = None) -> None:
             fetched = cfg.get("server_url", "").rstrip("/")
             if fetched:
                 base = fetched
-            agent_key = cfg.get("agent_api_key", "")
-            if agent_key:
+            fetched_key = cfg.get("agent_api_key", "")
+            if fetched_key:
+                agent_key = fetched_key
                 _LOG.info("  Agent API key received from /agent-config")
         elif resp.status_code == 401:
-            _LOG.warning("  /agent-config requires --admin-key; skipping key auto-fetch")
+            if agent_key:
+                _LOG.info("  /agent-config requires --admin-key; using injected api_key")
+            else:
+                _LOG.warning("  /agent-config requires --admin-key; no api_key available — edit config.json manually")
     except Exception as e:
         _LOG.warning("  Could not fetch /agent-config: %s", e)
 
@@ -1233,12 +1485,16 @@ def main() -> None:
     parser.add_argument("--uninstall",  action="store_true")
     parser.add_argument("--server-url", default=None)
     parser.add_argument("--admin-key",  default=None)
+    parser.add_argument("--api-key",    default=None,
+                        help="Agent ingest API key — injected by the server "
+                             "during curl|bash installs so no --admin-key is needed.")
     args = parser.parse_args()
 
     _setup_logging()
 
     if args.install:
-        install(server_url=args.server_url, admin_key=args.admin_key)
+        install(server_url=args.server_url, admin_key=args.admin_key,
+                api_key=args.api_key)
         return
     if args.uninstall:
         uninstall()
@@ -1305,6 +1561,12 @@ def main() -> None:
     # partition can never be inflated by a long shutdown.
     SLEEP_GAP_MIN_SEC = TICK_INTERVAL * 3
     SLEEP_GAP_MAX_SEC = 86_400
+
+    # ── Version check counter ──────────────────────────────────────────────────
+    # Fire check_for_update() every ~30 minutes so the agent picks up a server
+    # version bump without requiring a process restart.
+    _update_check_counter    = 0
+    _UPDATE_CHECK_THRESHOLD  = max(1, 1800 // TICK_INTERVAL)
 
     try:
         while True:
@@ -1410,6 +1672,15 @@ def main() -> None:
                     elapsed_since_flush = 0
 
                 elapsed_since_log = 0
+
+            # ── Periodic version check ────────────────────────────────────────────
+            # Re-check the server version every ~30 minutes so a server upgrade
+            # mid-session is detected.  check_for_update() is lightweight — it
+            # just writes update-status.json so the UI can show the button.
+            _update_check_counter += 1
+            if _update_check_counter >= _UPDATE_CHECK_THRESHOLD:
+                _update_check_counter = 0
+                check_for_update()
 
             time.sleep(TICK_INTERVAL)
 

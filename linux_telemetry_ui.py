@@ -89,7 +89,12 @@ _SERVER_BASE  = (_cfg.get("ingest_url", "") or "").replace("/ingest", "").rstrip
 _DEVICE_KEY   = _cfg.get("api_key", "")
 _AUTO_REFRESH = 30   # seconds
 
-UI_VERSION = "3.2"
+UI_VERSION = "3.1"
+
+# ── Update state (set by check_for_update, read by tray menu) ──────────────────
+_update_available     = False
+_server_new_version   = ""
+_server_download_urls: dict = {}
 
 # ── Theme ─────────────────────────────────────────────────────────────────────────
 def _detect_dark_mode() -> bool:
@@ -219,53 +224,161 @@ def _ver(v: str) -> tuple:
     return tuple(out) or (0,)
 
 
-# ── Self-update ───────────────────────────────────────────────────────────────────
+# ── Self-update (detection + manual trigger) ──────────────────────────────────────
+
+def _write_update_log(msg: str) -> None:
+    """Append a timestamped message to DATA_DIR/update.log."""
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        path = os.path.join(DATA_DIR, "update.log")
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"{datetime.now(timezone.utc).isoformat()} | {msg}\n")
+    except Exception:
+        pass
+
+
 def check_for_update() -> None:
-    if not getattr(sys, "frozen", False):
-        return
+    """
+    Detection-only.  Queries /api/health; if the server reports a
+    newer version, sets _update_available so the tray menu can show
+    an "Update Available" button.  Skips silently on any error.
+    """
+    global _update_available, _server_new_version, _server_download_urls
     if not _SERVER_BASE:
         return
     try:
         resp = requests.get(f"{_SERVER_BASE}/api/health", timeout=10, verify=True)
         if not resp.ok:
+            _update_available = False
             return
         data           = resp.json()
         server_version = data.get("version", "0")
-        # Linux UI must read the Linux-specific download URL.
-        # Reading 'ui_zip_download_url' (the Windows key) here would cause the
-        # UI to download a Windows EXE bundle and try to execv() it on Linux,
-        # which fails silently.  Falls back to /download-linux-ui for old servers.
-        download_url   = data.get(
-            "linux_ui_download_url",
-            f"{_SERVER_BASE}/download-linux-ui",
-        )
+        if _ver(server_version) > _ver(UI_VERSION):
+            _update_available = True
+            _server_new_version = server_version
+            _server_download_urls = {
+                "agent": data.get("linux_agent_download_url", f"{_SERVER_BASE}/download-linux-agent"),
+                "ui":    data.get("linux_ui_download_url",    f"{_SERVER_BASE}/download-linux-ui"),
+            }
+        else:
+            _update_available = False
     except Exception:
-        return
-    if _ver(server_version) <= _ver(UI_VERSION):
+        pass
+
+
+def _perform_update() -> None:
+    """
+    Called when the user clicks "Update Available" in the tray menu.
+    Downloads new agent + UI scripts, replaces them on disk, restarts
+    the agent, and re-execs the UI.
+    """
+    global _update_available
+    if not _update_available or not _server_download_urls:
         return
 
     import tempfile
     tmp_dir = os.path.join(tempfile.gettempdir(), "telemetry-agent")
     os.makedirs(tmp_dir, exist_ok=True)
-    tmp_zip = os.path.join(tmp_dir, "telemetry_ui_new.zip")
+
+    script_dir    = os.path.dirname(os.path.abspath(__file__))
+    agent_path    = os.path.join(script_dir, "linux_telemetry_agent.py")
+    ui_path       = os.path.join(script_dir, "linux_telemetry_ui.py")
+    tmp_agent     = os.path.join(tmp_dir, "linux_telemetry_agent_new.py")
+    tmp_ui        = os.path.join(tmp_dir, "linux_telemetry_ui_new.py")
+
+    # Download new agent script
     try:
-        with requests.get(download_url, stream=True, timeout=60, verify=True) as r:
+        with requests.get(_server_download_urls["agent"], stream=True, timeout=60) as r:
             r.raise_for_status()
-            with open(tmp_zip, "wb") as f:
-                for chunk in r.iter_content(chunk_size=65536):
+            with open(tmp_agent, "w", encoding="utf-8") as f:
+                for chunk in r.iter_content(chunk_size=65536, decode_unicode=True):
                     f.write(chunk)
-    except Exception:
-        return
-    if os.path.getsize(tmp_zip) < 1024:
+    except Exception as e:
+        _write_update_log(f"Agent download failed: {e}")
         return
 
-    install_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
-    try:
-        shutil.unpack_archive(tmp_zip, install_dir)
-        os.remove(tmp_zip)
-    except Exception:
+    if os.path.getsize(tmp_agent) < 1024:
+        _write_update_log("Agent download too small — aborting")
         return
-    os.execv(sys.executable, [sys.executable] + sys.argv)
+
+    # Download new UI script
+    try:
+        with requests.get(_server_download_urls["ui"], stream=True, timeout=60) as r:
+            r.raise_for_status()
+            with open(tmp_ui, "w", encoding="utf-8") as f:
+                for chunk in r.iter_content(chunk_size=65536, decode_unicode=True):
+                    f.write(chunk)
+    except Exception as e:
+        _write_update_log(f"UI download failed: {e}")
+        return
+
+    if os.path.getsize(tmp_ui) < 1024:
+        _write_update_log("UI download too small — aborting")
+        return
+
+    _update_available = False
+
+    # Replace agent script
+    try:
+        shutil.copy2(tmp_agent, agent_path)
+        mode = os.stat(agent_path).st_mode | 0o111
+        os.chmod(agent_path, mode)
+    except Exception as e:
+        _write_update_log(f"Agent replace failed: {e}")
+        return
+
+    # Replace UI script
+    try:
+        shutil.copy2(tmp_ui, ui_path)
+        mode = os.stat(ui_path).st_mode | 0o111
+        os.chmod(ui_path, mode)
+    except Exception as e:
+        _write_update_log(f"UI replace failed: {e}")
+        return
+
+    # Cleanup temp files
+    for p in [tmp_agent, tmp_ui]:
+        try:
+            os.remove(p)
+        except Exception:
+            pass
+
+    _write_update_log("Update applied — restarting")
+
+    # Restart the agent so it picks up the new version immediately.
+    # Spawning a new process directly fails silently: the running agent holds
+    # an exclusive fcntl lock on agent.pid, so the new process exits immediately
+    # via _acquire_singleton().  Use systemctl if available; otherwise kill the
+    # old process first to release the lock before spawning.
+    _agent_restarted = False
+    try:
+        r = subprocess.run(
+            ["systemctl", "--user", "restart", "telemetry-agent.service"],
+            capture_output=True, timeout=10,
+        )
+        if r.returncode == 0:
+            _agent_restarted = True
+    except Exception:
+        pass
+    if not _agent_restarted:
+        try:
+            subprocess.run(["pkill", "-f", "linux_telemetry_agent.py"],
+                           capture_output=True, timeout=5)
+            time.sleep(2)
+        except Exception:
+            pass
+        try:
+            subprocess.Popen([sys.executable, agent_path], close_fds=True)
+        except Exception:
+            pass
+
+    # Re-exec the UI in-place
+    try:
+        os.execv(sys.executable, [sys.executable, ui_path] + sys.argv[1:])
+    except Exception as e:
+        _write_update_log(f"Re-exec failed: {e}")
+        # Fallback: start a new process
+        subprocess.Popen([sys.executable, ui_path] + sys.argv[1:], close_fds=True)
 
 
 # ── Backup events (read from SQLite) ─────────────────────────────────────────────
@@ -1516,7 +1629,14 @@ def _run_gtk_status_tray(root: tk.Tk) -> None:
         item_refresh.connect("activate", _refresh)
         menu.append(item_refresh)
 
-        menu.append(Gtk.SeparatorMenuItem())
+        if _update_available:
+            item_update = Gtk.MenuItem(label=f"Update to v{_server_new_version} Available")
+            def _do_gtk_update(*_):
+                Gtk.main_quit()
+                root.after(0, _perform_update)
+            item_update.connect("activate", _do_gtk_update)
+            menu.append(item_update)
+            menu.append(Gtk.SeparatorMenuItem())
 
         item_exit = Gtk.MenuItem(label="Exit Agent UI")
         def _exit(*_):
@@ -1537,6 +1657,8 @@ def _run_gtk_status_tray(root: tk.Tk) -> None:
     status_icon.connect("activate",    _on_activate)
     status_icon.connect("popup-menu",  _on_popup_menu)
 
+    _gtk_update_check_counter = [0]
+
     def _update_icon():
         try:
             s, _ = read_local()
@@ -1545,9 +1667,17 @@ def _run_gtk_status_tray(root: tk.Tk) -> None:
                 active = s.get("active", False)
                 col = "#dc2626" if locked else ("#16a34a" if active else "#d97706")
                 status_icon.set_from_pixbuf(_pil_to_pixbuf(_make_tray_icon(col)))
-                status_icon.set_tooltip_text(_tooltip_text())
+                tip = _tooltip_text()
+                if _update_available:
+                    tip += f" | Update v{_server_new_version} available"
+                status_icon.set_tooltip_text(tip)
         except Exception:
             pass
+        # Check for server updates every ~1 hour
+        _gtk_update_check_counter[0] += 1
+        if _gtk_update_check_counter[0] >= 360:
+            _gtk_update_check_counter[0] = 0
+            threading.Thread(target=check_for_update, daemon=True).start()
         return True  # keep repeating
 
     GLib.timeout_add_seconds(10, _update_icon)
@@ -1587,15 +1717,26 @@ def build_tray_icon(root: tk.Tk) -> pystray.Icon:
         icon.stop()
         root.after(0, root.quit)
 
+    def _do_update_action(*_):
+        threading.Thread(target=_perform_update, daemon=True).start()
+
     menu = pystray.Menu(
         pystray.MenuItem("Show Stats",     lambda *_: _show(),           default=True),
         pystray.MenuItem("Open Dashboard", lambda *_: _open_dashboard()),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Refresh",        lambda *_: _do_refresh()),
         pystray.Menu.SEPARATOR,
+        pystray.MenuItem(
+            lambda _: f"Update to v{_server_new_version} Available",
+            _do_update_action,
+            visible=lambda _: _update_available,
+        ),
         pystray.MenuItem("Exit Agent UI",  _do_exit),
     )
     icon = pystray.Icon("TelemetryAgent", _make_tray_icon(), "TelemetryAgent", menu)
+
+    _prev_update_available = [False]
+    _update_check_counter = [0]
 
     def _updater():
         while True:
@@ -1607,9 +1748,26 @@ def build_tray_icon(root: tk.Tk) -> pystray.Icon:
                     active = status.get("active", False)
                     col    = "#dc2626" if locked else ("#16a34a" if active else "#d97706")
                     icon.icon = _make_tray_icon(col)
-                icon.title = _tooltip_text()
+                parts = [_tooltip_text()]
+                if _update_available:
+                    parts.append(f"Update v{_server_new_version} available")
+                icon.title = " | ".join(parts)
             except Exception:
                 pass
+
+            # Rebuild menu when update becomes available
+            if _update_available and not _prev_update_available[0]:
+                _prev_update_available[0] = True
+                try:
+                    icon.update_menu()
+                except Exception:
+                    pass
+
+            # Check for server updates every ~1 hour (360 × 10 s intervals)
+            _update_check_counter[0] += 1
+            if _update_check_counter[0] >= 360:
+                _update_check_counter[0] = 0
+                threading.Thread(target=check_for_update, daemon=True).start()
 
     threading.Thread(target=_updater, daemon=True).start()
     return icon
@@ -1617,7 +1775,8 @@ def build_tray_icon(root: tk.Tk) -> pystray.Icon:
 
 # ── Entry point ───────────────────────────────────────────────────────────────────
 def main():
-    check_for_update()
+    # Background version check — never block the tray from appearing
+    threading.Thread(target=check_for_update, daemon=True).start()
     root = tk.Tk()
     root.withdraw()
     root.title("TelemetryAgent UI")
@@ -1637,8 +1796,37 @@ def main():
                   file=sys.stderr)
             build_tray_icon(root).run_detached()
     else:
-        # GNOME, KDE, Xfce, etc.: pystray AppIndicator works correctly.
-        build_tray_icon(root).run_detached()
+        # GNOME, KDE, Xfce, etc.: pystray AppIndicator.
+        # Wrap in try/except — pystray may fail if AppIndicator/GI is missing
+        # (common on Ubuntu without python3-gi + gnome-shell-extension-appindicator).
+        try:
+            build_tray_icon(root).run_detached()
+        except Exception as e:
+            print(f"[warn] pystray failed ({e}) — trying GTK StatusIcon", file=sys.stderr)
+            _is_gnome = "GNOME" in _DESKTOP or "UBUNTU" in _DESKTOP
+            if _is_gnome:
+                print(
+                    "[hint] On Ubuntu/GNOME the tray icon is invisible unless the\n"
+                    "  AppIndicator extension is enabled. Fix with:\n"
+                    "    gnome-extensions enable ubuntu-appindicators@ubuntu.com\n"
+                    "  or install if missing:\n"
+                    "    sudo apt install -y gnome-shell-extension-appindicator",
+                    file=sys.stderr,
+                )
+            try:
+                threading.Thread(
+                    target=_run_gtk_status_tray,
+                    args=(root,),
+                    daemon=True,
+                ).start()
+            except Exception as e2:
+                print(
+                    f"[error] GTK StatusIcon also failed ({e2}).\n"
+                    "  Install missing packages:\n"
+                    "    sudo apt install -y python3-gi gir1.2-appindicator3-0.1 gnome-shell-extension-appindicator\n"
+                    "  Then restart: ~/.local/bin/telemetry-ui",
+                    file=sys.stderr,
+                )
 
     root.mainloop()
 

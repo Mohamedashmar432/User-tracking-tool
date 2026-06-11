@@ -23,6 +23,7 @@ func-venv/
 # PyInstaller build artifacts
 build/
 dist/
+build.log
 
 # Scripts with secrets / machine-specific config
 deploy.ps1

@@ -708,6 +708,50 @@
                     </div>
                 </div>
 
+                <!-- Linux uninstall command -->
+                <div class="bg-white rounded-3xl border border-rose-200 shadow-sm p-6">
+                    <div class="flex items-center gap-3 mb-4">
+                        <div class="bg-rose-600 p-2.5 rounded-xl"><i data-lucide="terminal" class="w-4 h-4 text-white"></i></div>
+                        <div>
+                            <div class="flex items-center gap-2">
+                                <h3 class="font-bold text-slate-800">Linux — One Command Uninstall</h3>
+                                <span class="text-xs font-semibold bg-rose-100 text-rose-700 px-2 py-0.5 rounded-full">Run on the employee machine</span>
+                            </div>
+                            <p class="text-xs text-slate-400 mt-0.5">Stops the agent, removes systemd + XDG autostart, and deletes data directory. No sudo needed for the per-user install.</p>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-3 bg-slate-900 rounded-2xl px-5 py-4 mb-4">
+                        <span class="text-slate-500 font-mono text-sm shrink-0">$</span>
+                        <code id="linuxUninstallCmd" class="flex-1 text-sm text-rose-400 font-mono break-all">Loading...</code>
+                        <button id="copyLinuxUninstallBtn" onclick="copyAgentCmd('linuxUninstallCmd','copyLinuxUninstallBtn')" class="shrink-0 p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700 transition-all" title="Copy">
+                            <i data-lucide="copy" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+                    <div class="grid grid-cols-3 gap-3 mb-4">
+                        <div class="flex items-start gap-2.5 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2.5">
+                            <i data-lucide="trash-2" class="w-4 h-4 text-rose-500 shrink-0 mt-0.5"></i>
+                            <p class="text-xs text-rose-700 leading-relaxed">Stops systemd user service + watchdog timer</p>
+                        </div>
+                        <div class="flex items-start gap-2.5 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2.5">
+                            <i data-lucide="file-x" class="w-4 h-4 text-rose-500 shrink-0 mt-0.5"></i>
+                            <p class="text-xs text-rose-700 leading-relaxed">Removes XDG autostart .desktop + wrapper scripts</p>
+                        </div>
+                        <div class="flex items-start gap-2.5 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2.5">
+                            <i data-lucide="cloud" class="w-4 h-4 text-emerald-500 shrink-0 mt-0.5"></i>
+                            <p class="text-xs text-emerald-700 leading-relaxed">Cloud data in Azure Storage is not touched</p>
+                        </div>
+                    </div>
+                    <div class="flex items-start gap-3 bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3">
+                        <i data-lucide="info" class="w-4 h-4 text-slate-500 shrink-0 mt-0.5"></i>
+                        <p class="text-xs text-slate-600 leading-relaxed">
+                            Non-interactive flag (skips the "Proceed? y/N" prompt): append
+                            <code class="bg-slate-200 px-1 rounded mx-0.5">| bash -s -- --yes</code> or set
+                            <code class="bg-slate-200 px-1 rounded mx-0.5">YES=1</code>. To also remove system packages (xdotool, libwnck), append
+                            <code class="bg-slate-200 px-1 rounded mx-0.5">--purge</code> (requires sudo).
+                        </p>
+                    </div>
+                </div>
+
                 <div class="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
                     <h3 class="font-bold text-slate-800 mb-3">Manual Downloads</h3>
                     <div class="flex gap-3 flex-wrap">
@@ -1556,6 +1600,8 @@ async function initApp() {
         `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "iwr '${base}/uninstall-script' -OutFile ([IO.Path]::GetTempPath()+'pa_uninstall.ps1') -UseBasicParsing; & ([IO.Path]::GetTempPath()+'pa_uninstall.ps1')"`;
     document.getElementById('linuxInstallCmd').textContent =
         `curl -fsSL '${base}/install-script-linux' | bash`;
+    document.getElementById('linuxUninstallCmd').textContent =
+        `curl -fsSL '${base}/uninstall-script-linux' | bash`;
 
     // Version badge
     try {

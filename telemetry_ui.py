@@ -58,7 +58,12 @@ _SERVER_BASE = (_cfg.get("ingest_url", "") or "").replace("/ingest", "").rstrip(
 _DEVICE_KEY  = _cfg.get("api_key", "")
 _AUTO_REFRESH = 30  # seconds
 
-UI_VERSION = "3.2"
+UI_VERSION = "3.1"
+
+# ── Update state ──────────────────────────────────────────────────────────────
+_update_available = False
+_server_new_version = ""
+_server_download_urls: dict = {}
 
 # ── Theme ─────────────────────────────────────────────────────────────────────
 def _detect_dark_mode() -> bool:
@@ -306,59 +311,120 @@ def _ensure_agent_running() -> None:
 
 
 # ── Self-update ───────────────────────────────────────────────────────────────
+def _write_update_log(msg: str) -> None:
+    """Append a timestamped line to update.log in ProgramData AND %TEMP%."""
+    try:
+        os.makedirs(PROGRAM_DATA, exist_ok=True)
+        log = os.path.join(PROGRAM_DATA, "update.log")
+        with open(log, "a", encoding="utf-8") as f:
+            f.write(f"{datetime.now(timezone.utc).isoformat()} | {msg}\n")
+    except Exception:
+        pass
+    try:
+        tmp = os.path.join(tempfile.gettempdir(), "TelemetryAgent")
+        os.makedirs(tmp, exist_ok=True)
+        log2 = os.path.join(tmp, "update.log")
+        with open(log2, "a", encoding="utf-8") as f:
+            f.write(f"{datetime.now(timezone.utc).isoformat()} | {msg}\n")
+    except Exception:
+        pass
+
+
 def check_for_update() -> None:
-    if not getattr(sys, "frozen", False):
-        return
+    global _update_available, _server_new_version, _server_download_urls
     if not _SERVER_BASE:
         return
-    current_exe = sys.executable
-    install_dir = os.path.dirname(current_exe)
     try:
         resp = requests.get(f"{_SERVER_BASE}/api/health", timeout=10, verify=True)
         if not resp.ok:
+            _update_available = False
             return
         data           = resp.json()
         server_version = data.get("version", "0")
-        download_url   = data.get("ui_zip_download_url", f"{_SERVER_BASE}/download-ui")
+        if _ver(server_version) > _ver(UI_VERSION):
+            _update_available = True
+            _server_new_version = server_version
+            _server_download_urls = {
+                "agent_zip": data.get("agent_zip_download_url", f"{_SERVER_BASE}/download-agent-zip"),
+                "ui_zip":    data.get("ui_zip_download_url", f"{_SERVER_BASE}/download-ui"),
+            }
+        else:
+            _update_available = False
     except Exception:
-        return
-    if _ver(server_version) <= _ver(UI_VERSION):
-        return
-    tmp_dir = os.path.join(tempfile.gettempdir(), "TelemetryAgent")
-    os.makedirs(tmp_dir, exist_ok=True)
-    tmp_zip = os.path.join(tmp_dir, "telemetry_ui_new.zip")
-    ps_path = os.path.join(tmp_dir, "ui_updater.ps1")
-    try:
-        with requests.get(download_url, stream=True, timeout=60, verify=True) as r:
-            r.raise_for_status()
-            with open(tmp_zip, "wb") as f:
-                for chunk in r.iter_content(chunk_size=65536):
-                    f.write(chunk)
-    except Exception:
-        return
-    if os.path.getsize(tmp_zip) < 1024:
+        pass
+
+
+def _perform_update() -> None:
+    """Download new agent+UI ZIPs, launch PS1 updater, then exit."""
+    global _update_available
+    if not _update_available or not _server_download_urls:
         return
 
-    # Magic-byte sanity check — ensure the download is a real ZIP.
-    # Without this, a misconfigured AGENT_ZIP_DOWNLOAD_URL pointing at an HTML
-    # 404 page would silently replace the UI install directory with junk.
+    if getattr(sys, "frozen", False):
+        current_exe = sys.executable
+        install_dir = os.path.dirname(current_exe)
+        agent_install_dir = os.path.normpath(
+            os.path.join(install_dir, "..", "TelemetryAgent")
+        )
+    else:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        install_dir = os.path.join(script_dir, "dist", "telemetry_ui")
+        agent_install_dir = os.path.join(script_dir, "dist", "telemetry_agent")
+        current_exe = os.path.join(install_dir, "telemetry_ui.exe")
+    tmp_dir = os.path.join(tempfile.gettempdir(), "TelemetryAgent")
+    os.makedirs(tmp_dir, exist_ok=True)
+
+    tmp_agent_zip = os.path.join(tmp_dir, "telemetry_agent_new.zip")
+    tmp_ui_zip    = os.path.join(tmp_dir, "telemetry_ui_new.zip")
+    ps_path       = os.path.join(tmp_dir, "update_both.ps1")
+    log_path      = os.path.join(tmp_dir, "update_error.log")
+
     try:
-        with open(tmp_zip, "rb") as f:
-            magic = f.read(4)
-        if magic != b"PK\x03\x04":
-            try: os.remove(tmp_zip)
-            except OSError: pass
-            return
-    except Exception:
+        with requests.get(_server_download_urls["agent_zip"], stream=True, timeout=120) as r:
+            r.raise_for_status()
+            with open(tmp_agent_zip, "wb") as f:
+                for chunk in r.iter_content(65536):
+                    f.write(chunk)
+
+        with requests.get(_server_download_urls["ui_zip"], stream=True, timeout=120) as r:
+            r.raise_for_status()
+            with open(tmp_ui_zip, "wb") as f:
+                for chunk in r.iter_content(65536):
+                    f.write(chunk)
+    except Exception as e:
+        _write_update_log(f"Download failed: {e}")
         return
+
+    for z, label in [(tmp_agent_zip, "agent"), (tmp_ui_zip, "UI")]:
+        if not os.path.exists(z) or os.path.getsize(z) < 1024:
+            _write_update_log(f"{label} ZIP missing or too small: {z}")
+            return
+        with open(z, "rb") as f:
+            if f.read(4) != b"PK\x03\x04":
+                _write_update_log(f"{label} ZIP has wrong magic bytes: {z}")
+                return
 
     ps_lines = [
         "Start-Sleep -Seconds 3",
-        f"Expand-Archive -Path '{tmp_zip}' -DestinationPath '{install_dir}' -Force",
-        f"Get-ChildItem -Path '{install_dir}' -Recurse | Unblock-File -ErrorAction SilentlyContinue",
-        f"Remove-Item '{tmp_zip}' -Force -ErrorAction SilentlyContinue",
-        f"Start-Process '{current_exe}'",
-        "Remove-Item $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue",
+        f"$ErrorActionPreference = 'Continue'",
+        f"$LogFile = '{log_path}'",
+        f"try {{",
+        f"  # Kill the running agent FIRST so its files are not locked during extraction",
+        f"  Get-Process -Name 'telemetry_agent' -ErrorAction SilentlyContinue | Stop-Process -Force",
+        f"  Start-Sleep -Seconds 1",
+        f"  Expand-Archive -Path '{tmp_agent_zip}' -DestinationPath '{agent_install_dir}' -Force -ErrorAction Stop",
+        f"  Expand-Archive -Path '{tmp_ui_zip}' -DestinationPath '{install_dir}' -Force -ErrorAction Stop",
+        f"  Get-ChildItem -Path '{agent_install_dir}' -Recurse | Unblock-File -ErrorAction SilentlyContinue",
+        f"  Get-ChildItem -Path '{install_dir}' -Recurse | Unblock-File -ErrorAction SilentlyContinue",
+        f"  Start-Process '{os.path.join(agent_install_dir, 'telemetry_agent.exe')}'",
+        f"  Start-Process '{current_exe}'",
+        f"}} catch {{",
+        f'  "$(Get-Date -Format u) | $_" | Out-File $LogFile -Encoding utf8',
+        f"}} finally {{",
+        f"  Remove-Item '{tmp_agent_zip}' -Force -ErrorAction SilentlyContinue",
+        f"  Remove-Item '{tmp_ui_zip}' -Force -ErrorAction SilentlyContinue",
+        f"  Remove-Item $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue",
+        f"}}",
     ]
     with open(ps_path, "w", encoding="utf-8") as f:
         f.write("\n".join(ps_lines))
@@ -368,7 +434,7 @@ def check_for_update() -> None:
         creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW,
         close_fds=True,
     )
-    sys.exit(0)
+    os._exit(0)
 
 
 # ── Backup events ─────────────────────────────────────────────────────────────
@@ -1685,17 +1751,27 @@ def run_tray(root: tk.Tk):
         icon.stop()
         root.after(0, root.quit)
 
+    def _do_update_action(*_):
+        threading.Thread(target=_perform_update, daemon=True).start()
+
     menu = pystray.Menu(
         pystray.MenuItem("Show Stats",     lambda *_: _show(),           default=True),
         pystray.MenuItem("Open Dashboard", lambda *_: _open_dashboard()),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Refresh",        lambda *_: _do_refresh()),
         pystray.Menu.SEPARATOR,
+        pystray.MenuItem(
+            lambda _: f"Update to v{_server_new_version} Available",
+            _do_update_action,
+            visible=lambda _: _update_available,
+        ),
         pystray.MenuItem("Exit Agent UI",  _do_exit),
     )
     icon = pystray.Icon("TelemetryAgent", _make_tray_icon(), "TelemetryAgent", menu)
 
     _agent_check_counter = [0]
+    _update_check_counter = [0]
+    _prev_update_available = [False]
 
     def _updater():
         while True:
@@ -1707,15 +1783,32 @@ def run_tray(root: tk.Tk):
                     active = status.get("active", False)
                     col    = "#dc2626" if locked else ("#16a34a" if active else "#d97706")
                     icon.icon = _make_tray_icon(col)
-                icon.title = _tooltip_text()
+                parts = [_tooltip_text()]
+                if _update_available:
+                    parts.append(f"Update v{_server_new_version} available")
+                icon.title = " | ".join(parts)
             except Exception:
                 pass
+
+            # Rebuild menu when update becomes available (so the menu item appears)
+            if _update_available and not _prev_update_available[0]:
+                _prev_update_available[0] = True
+                try:
+                    icon.update_menu()
+                except Exception:
+                    pass
 
             # Check agent is still running every ~5 minutes (30 × 10 s intervals)
             _agent_check_counter[0] += 1
             if _agent_check_counter[0] >= 30:
                 _agent_check_counter[0] = 0
                 threading.Thread(target=_ensure_agent_running, daemon=True).start()
+
+            # Check for server updates every ~1 hour (360 × 10 s intervals)
+            _update_check_counter[0] += 1
+            if _update_check_counter[0] >= 360:
+                _update_check_counter[0] = 0
+                threading.Thread(target=check_for_update, daemon=True).start()
 
     threading.Thread(target=_updater, daemon=True).start()
     icon.run()
@@ -1727,7 +1820,7 @@ def run_tray(root: tk.Tk):
 
 def main():
     # ── Background housekeeping (never block the tray from appearing) ──────────
-    # 1. Auto-update: download + self-replace if server has a newer UI version
+    # 1. Check for available server version — user sees "Update Available" button
     threading.Thread(target=check_for_update, daemon=True).start()
 
     # 2. Self-healing: re-register the TelemetryUI scheduled task if it was removed

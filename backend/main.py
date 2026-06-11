@@ -81,8 +81,9 @@ async def health(request: Request):
         "agent_download_url":       f"{base}/download-agent",
         "agent_zip_download_url":   f"{base}/download-agent-zip",
         "ui_zip_download_url":      f"{base}/download-ui",
-        "linux_agent_download_url": f"{base}/download-linux-agent",
-        "linux_ui_download_url":    f"{base}/download-linux-ui",
+        "linux_agent_download_url":     f"{base}/download-linux-agent",
+        "linux_ui_download_url":        f"{base}/download-linux-ui",
+        "linux_dashboard_download_url": f"{base}/download-linux-dashboard",
     }
 
 
