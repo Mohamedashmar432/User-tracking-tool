@@ -19,8 +19,16 @@ from typing import Any, Dict, List
 
 # ── Browser process names ────────────────────────────────────────────────────────
 BROWSER_APPS: set = {
+    # Windows
     "chrome.exe", "msedge.exe", "firefox.exe",
     "brave.exe",  "opera.exe",  "vivaldi.exe",
+    # Linux (process names reported by AT-SPI2 / xdotool)
+    "firefox", "firefox-esr", "firefox-bin",
+    "chrome", "google-chrome", "google-chrome-stable",
+    "chromium", "chromium-browser",
+    "brave", "brave-browser",
+    "opera", "vivaldi",
+    "microsoft-edge", "microsoft-edge-dev",
 }
 
 # ── Productive apps (process names, lowercase) ───────────────────────────────────

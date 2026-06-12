@@ -306,12 +306,13 @@ class StateEngine:
 
 
 # ── Status + cache writers ────────────────────────────────────────────────────────
-def _write_status_file(app: str, active: bool, locked: bool, idle_secs: int) -> None:
+def _write_status_file(app: str, active: bool, locked: bool, idle_secs: int, domain: str = "") -> None:
     try:
         os.makedirs(DATA_DIR, exist_ok=True)
         payload = {
             "timestamp":    datetime.now(timezone.utc).isoformat(),
             "app":          app,
+            "domain":       domain,
             "active":       active,
             "locked":       locked,
             "idle_seconds": idle_secs,
@@ -1634,7 +1635,7 @@ def main() -> None:
             current_state = state_eng.tick(idle_secs, is_locked, _tick_elapsed)
             is_active = current_state == ActivityState.ACTIVE
 
-            _write_status_file(app_name, is_active, is_locked, idle_secs)
+            _write_status_file(app_name, is_active, is_locked, idle_secs, domain)
 
             # ── Every LOG_INTERVAL: build one raw event ────────────────────────────
             if elapsed_since_log >= LOG_INTERVAL:

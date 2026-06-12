@@ -23,7 +23,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from typing import Any, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -223,8 +223,10 @@ def build_display_data(date_str: str) -> Dict[str, Any]:
     conn_ok = False
 
     # Read status
+    domain = ""
     if status:
         app = status.get("app", "—")
+        domain = status.get("domain", "")
         active = status.get("active", False)
         locked = status.get("locked", False)
         idle_seconds = status.get("idle_seconds", 0)
@@ -257,6 +259,7 @@ def build_display_data(date_str: str) -> Dict[str, Any]:
         "username":        username,
         "device":          device,
         "app":             app,
+        "domain":          domain,
         "active":          active,
         "locked":          locked,
         "idle_seconds":    idle_seconds,
@@ -332,6 +335,7 @@ def draw_screen(
     username = data.get("username", getpass.getuser())
     device = data.get("device", platform.node())
     app = data.get("app", "—")
+    domain = data.get("domain", "")
     active = data.get("active", False)
     locked = data.get("locked", False)
     idle_secs = data.get("idle_seconds", 0)
@@ -378,12 +382,16 @@ def draw_screen(
     status_line_left = f"║  "
     status_app = f"{status_label}   {app}"
     score_part = f"Score: {score_pct}  {score_bar}"
-    inner_w = W - 4
-    gap = max(1, inner_w - len(status_app) - len(score_part))
-    status_line = f"║  "
+    # Reserve space for score on the right (score_x = W-2-len(score_part))
+    domain_x = 4 + len(status_app) + 5          # col after "●  Active   Firefox  ›  "
+    domain_max_w = max(0, (W - 2 - len(score_part)) - domain_x - 2)
+    domain_trunc = domain[:domain_max_w] if domain and domain_max_w > 4 else ""
     _safe_addstr(stdscr, row, 0, "║  ", C_CYAN)
     _safe_addstr(stdscr, row, 2, "● ", dot_color | curses.A_BOLD)
     _safe_addstr(stdscr, row, 4, status_app, C_WHITE | curses.A_BOLD)
+    if domain_trunc:
+        _safe_addstr(stdscr, row, 4 + len(status_app), "  ›  ", C_CYAN)
+        _safe_addstr(stdscr, row, domain_x, domain_trunc, C_YELLOW)
     score_x = W - 2 - len(score_part)
     _safe_addstr(stdscr, row, score_x, score_part, C_MAGENTA | curses.A_BOLD)
     _safe_addstr(stdscr, row, W - 1, "║", C_CYAN)
