@@ -26,6 +26,9 @@
         .agent-tab { background: transparent; color: #64748b; border: none; }
         .agent-tab:hover { background: #f1f5f9; color: #334155; }
         .agent-tab.active { background: #eef2ff; color: #4f46e5; }
+        .install-os-tab { background: transparent; color: #64748b; border: none; cursor: pointer; }
+        .install-os-tab:hover { background: #f1f5f9; color: #334155; }
+        .install-os-tab.active { background: #1e293b; color: #ffffff; }
         .toggle-on  { background: #2563eb; }
         .toggle-off { background: #cbd5e1; }
         .toggle-on  .toggle-thumb { transform: translateX(20px); }
@@ -603,7 +606,7 @@
             <div class="flex items-center justify-between">
                 <div>
                     <h2 class="text-2xl font-bold text-slate-900">Agent Setup</h2>
-                    <p class="text-sm text-slate-400 mt-1">Deploy and manage the tracking agent on Windows machines</p>
+                    <p class="text-sm text-slate-400 mt-1">Deploy and manage the tracking agent on Windows, Linux, and macOS</p>
                 </div>
             </div>
 
@@ -639,116 +642,73 @@
                     </div>
                 </div>
 
+                <!-- Unified OS install block -->
                 <div class="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
                     <div class="flex items-center gap-3 mb-4">
                         <div class="bg-slate-900 p-2.5 rounded-xl"><i data-lucide="terminal" class="w-4 h-4 text-emerald-400"></i></div>
                         <div>
                             <h3 class="font-bold text-slate-800">One Command — Installs Everything</h3>
-                            <p class="text-xs text-slate-400 mt-0.5">Installs agent + UI companion. Run in any PowerShell window on the employee machine.</p>
+                            <p class="text-xs text-slate-400 mt-0.5">Select your OS, then run the command on the employee machine.</p>
                         </div>
                     </div>
-                    <div class="flex items-center gap-3 bg-slate-900 rounded-2xl px-5 py-4 mb-4">
-                        <i data-lucide="chevron-right" class="w-4 h-4 text-slate-500 shrink-0"></i>
-                        <code id="installCmd" class="flex-1 text-sm text-emerald-400 font-mono break-all">Loading...</code>
-                        <button id="copyBtn" onclick="copyAgentCmd('installCmd','copyBtn')" class="shrink-0 p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700 transition-all" title="Copy">
-                            <i data-lucide="copy" class="w-4 h-4"></i>
-                        </button>
+                    <!-- OS selector -->
+                    <div class="flex gap-1 bg-slate-100 p-1 rounded-xl w-fit mb-4">
+                        <button onclick="switchInstallOS('windows')" id="osTabWindows" class="install-os-tab active px-4 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5"><i data-lucide="monitor" class="w-3 h-3"></i>Windows</button>
+                        <button onclick="switchInstallOS('linux')"   id="osTabLinux"   class="install-os-tab px-4 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5"><i data-lucide="server" class="w-3 h-3"></i>Linux</button>
+                        <button onclick="switchInstallOS('mac')"     id="osTabMac"     class="install-os-tab px-4 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5"><i data-lucide="apple" class="w-3 h-3"></i>macOS</button>
                     </div>
-                    <div class="grid grid-cols-2 gap-3 mb-4">
-                        <div class="flex items-start gap-2.5 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2.5">
-                            <i data-lucide="check-circle" class="w-4 h-4 text-emerald-500 shrink-0 mt-0.5"></i>
-                            <p class="text-xs text-emerald-700 leading-relaxed">Agent tracks activity, uploads to server, auto-updates, works offline</p>
-                        </div>
-                        <div class="flex items-start gap-2.5 bg-purple-50 border border-purple-100 rounded-xl px-3 py-2.5">
-                            <i data-lucide="check-circle" class="w-4 h-4 text-purple-500 shrink-0 mt-0.5"></i>
-                            <p class="text-xs text-purple-700 leading-relaxed">UI companion shows tray icon + personal productivity popup with historical data</p>
-                        </div>
-                    </div>
-                    <div class="flex items-start gap-3 bg-amber-50 border border-amber-100 rounded-2xl px-4 py-3">
-                        <i data-lucide="info" class="w-4 h-4 text-amber-500 shrink-0 mt-0.5"></i>
-                        <p class="text-xs text-amber-700 leading-relaxed">UAC prompt will appear once. Both programs register ONLOGON scheduled tasks — they start automatically after every login, no manual action needed by the employee.</p>
-                    </div>
-                </div>
 
-                <!-- Linux install command -->
-                <div class="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
-                    <div class="flex items-center gap-3 mb-4">
-                        <div class="bg-slate-800 p-2.5 rounded-xl"><i data-lucide="terminal" class="w-4 h-4 text-yellow-400"></i></div>
-                        <div>
-                            <div class="flex items-center gap-2">
-                                <h3 class="font-bold text-slate-800">Linux — One Command Install</h3>
-                                <span class="text-xs font-semibold bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full">Ubuntu · Debian · Fedora · RHEL · Mint</span>
-                            </div>
-                            <p class="text-xs text-slate-400 mt-0.5">Installs agent + tray UI. Run in any terminal on the employee machine — no sudo required for per-user install.</p>
+                    <!-- Windows panel -->
+                    <div id="osPanelWindows">
+                        <div class="flex items-center gap-3 bg-slate-900 rounded-2xl px-5 py-4 mb-4">
+                            <i data-lucide="chevron-right" class="w-4 h-4 text-slate-500 shrink-0"></i>
+                            <code id="installCmd" class="flex-1 text-sm text-emerald-400 font-mono break-all">Loading...</code>
+                            <button id="copyBtn" onclick="copyAgentCmd('installCmd','copyBtn')" class="shrink-0 p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700 transition-all" title="Copy"><i data-lucide="copy" class="w-4 h-4"></i></button>
+                        </div>
+                        <div class="grid grid-cols-2 gap-3 mb-4">
+                            <div class="flex items-start gap-2.5 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2.5"><i data-lucide="check-circle" class="w-4 h-4 text-emerald-500 shrink-0 mt-0.5"></i><p class="text-xs text-emerald-700 leading-relaxed">Agent tracks activity, uploads to server, auto-updates, works offline</p></div>
+                            <div class="flex items-start gap-2.5 bg-purple-50 border border-purple-100 rounded-xl px-3 py-2.5"><i data-lucide="check-circle" class="w-4 h-4 text-purple-500 shrink-0 mt-0.5"></i><p class="text-xs text-purple-700 leading-relaxed">UI companion shows tray icon + personal productivity popup with historical data</p></div>
+                        </div>
+                        <div class="flex items-start gap-3 bg-amber-50 border border-amber-100 rounded-2xl px-4 py-3">
+                            <i data-lucide="info" class="w-4 h-4 text-amber-500 shrink-0 mt-0.5"></i>
+                            <p class="text-xs text-amber-700 leading-relaxed">UAC prompt will appear once. Both programs register ONLOGON scheduled tasks — they start automatically after every login.</p>
                         </div>
                     </div>
-                    <div class="flex items-center gap-3 bg-slate-900 rounded-2xl px-5 py-4 mb-4">
-                        <span class="text-slate-500 font-mono text-sm shrink-0">$</span>
-                        <code id="linuxInstallCmd" class="flex-1 text-sm text-yellow-300 font-mono break-all">Loading...</code>
-                        <button id="copyLinuxBtn" onclick="copyAgentCmd('linuxInstallCmd','copyLinuxBtn')" class="shrink-0 p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700 transition-all" title="Copy">
-                            <i data-lucide="copy" class="w-4 h-4"></i>
-                        </button>
-                    </div>
-                    <div class="grid grid-cols-2 gap-3 mb-4">
-                        <div class="flex items-start gap-2.5 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2.5">
-                            <i data-lucide="check-circle" class="w-4 h-4 text-emerald-500 shrink-0 mt-0.5"></i>
-                            <p class="text-xs text-emerald-700 leading-relaxed">Auto-detects apt / dnf / pacman / zypper — installs xdotool, xprintidle, Python venv</p>
-                        </div>
-                        <div class="flex items-start gap-2.5 bg-yellow-50 border border-yellow-100 rounded-xl px-3 py-2.5">
-                            <i data-lucide="check-circle" class="w-4 h-4 text-yellow-600 shrink-0 mt-0.5"></i>
-                            <p class="text-xs text-yellow-700 leading-relaxed">Registers systemd user service + XDG autostart · starts agent immediately</p>
-                        </div>
-                    </div>
-                    <div class="flex items-start gap-3 bg-blue-50 border border-blue-100 rounded-2xl px-4 py-3">
-                        <i data-lucide="info" class="w-4 h-4 text-blue-500 shrink-0 mt-0.5"></i>
-                        <p class="text-xs text-blue-700 leading-relaxed">
-                            Requires Python 3.9+ and an active X11 or Wayland session. After install, manage with:
-                            <code class="bg-blue-100 px-1 rounded mx-0.5">systemctl --user status telemetry-agent</code>
-                        </p>
-                    </div>
-                </div>
 
-                <!-- Linux uninstall command -->
-                <div class="bg-white rounded-3xl border border-rose-200 shadow-sm p-6">
-                    <div class="flex items-center gap-3 mb-4">
-                        <div class="bg-rose-600 p-2.5 rounded-xl"><i data-lucide="terminal" class="w-4 h-4 text-white"></i></div>
-                        <div>
-                            <div class="flex items-center gap-2">
-                                <h3 class="font-bold text-slate-800">Linux — One Command Uninstall</h3>
-                                <span class="text-xs font-semibold bg-rose-100 text-rose-700 px-2 py-0.5 rounded-full">Run on the employee machine</span>
-                            </div>
-                            <p class="text-xs text-slate-400 mt-0.5">Stops the agent, removes systemd + XDG autostart, and deletes data directory. No sudo needed for the per-user install.</p>
+                    <!-- Linux panel -->
+                    <div id="osPanelLinux" class="hidden">
+                        <div class="mb-1"><span class="text-xs font-semibold bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full">Ubuntu · Debian · Fedora · RHEL · Mint</span></div>
+                        <div class="flex items-center gap-3 bg-slate-900 rounded-2xl px-5 py-4 mb-4 mt-3">
+                            <span class="text-slate-500 font-mono text-sm shrink-0">$</span>
+                            <code id="linuxInstallCmd" class="flex-1 text-sm text-yellow-300 font-mono break-all">Loading...</code>
+                            <button id="copyLinuxBtn" onclick="copyAgentCmd('linuxInstallCmd','copyLinuxBtn')" class="shrink-0 p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700 transition-all" title="Copy"><i data-lucide="copy" class="w-4 h-4"></i></button>
+                        </div>
+                        <div class="grid grid-cols-2 gap-3 mb-4">
+                            <div class="flex items-start gap-2.5 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2.5"><i data-lucide="check-circle" class="w-4 h-4 text-emerald-500 shrink-0 mt-0.5"></i><p class="text-xs text-emerald-700 leading-relaxed">Auto-detects apt / dnf / pacman / zypper — installs xdotool, xprintidle, Python venv</p></div>
+                            <div class="flex items-start gap-2.5 bg-yellow-50 border border-yellow-100 rounded-xl px-3 py-2.5"><i data-lucide="check-circle" class="w-4 h-4 text-yellow-600 shrink-0 mt-0.5"></i><p class="text-xs text-yellow-700 leading-relaxed">Registers systemd user service + XDG autostart · starts agent immediately</p></div>
+                        </div>
+                        <div class="flex items-start gap-3 bg-blue-50 border border-blue-100 rounded-2xl px-4 py-3">
+                            <i data-lucide="info" class="w-4 h-4 text-blue-500 shrink-0 mt-0.5"></i>
+                            <p class="text-xs text-blue-700 leading-relaxed">Requires Python 3.9+ and an active X11 or Wayland session. After install, manage with: <code class="bg-blue-100 px-1 rounded mx-0.5">systemctl --user status telemetry-agent</code></p>
                         </div>
                     </div>
-                    <div class="flex items-center gap-3 bg-slate-900 rounded-2xl px-5 py-4 mb-4">
-                        <span class="text-slate-500 font-mono text-sm shrink-0">$</span>
-                        <code id="linuxUninstallCmd" class="flex-1 text-sm text-rose-400 font-mono break-all">Loading...</code>
-                        <button id="copyLinuxUninstallBtn" onclick="copyAgentCmd('linuxUninstallCmd','copyLinuxUninstallBtn')" class="shrink-0 p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700 transition-all" title="Copy">
-                            <i data-lucide="copy" class="w-4 h-4"></i>
-                        </button>
-                    </div>
-                    <div class="grid grid-cols-3 gap-3 mb-4">
-                        <div class="flex items-start gap-2.5 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2.5">
-                            <i data-lucide="trash-2" class="w-4 h-4 text-rose-500 shrink-0 mt-0.5"></i>
-                            <p class="text-xs text-rose-700 leading-relaxed">Stops systemd user service + watchdog timer</p>
+
+                    <!-- macOS panel -->
+                    <div id="osPanelMac" class="hidden">
+                        <div class="mb-1"><span class="text-xs font-semibold bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full">macOS 12+ · Apple Silicon &amp; Intel</span></div>
+                        <div class="flex items-center gap-3 bg-slate-900 rounded-2xl px-5 py-4 mb-4 mt-3">
+                            <span class="text-slate-500 font-mono text-sm shrink-0">$</span>
+                            <code id="macInstallCmd" class="flex-1 text-sm text-sky-300 font-mono break-all">Loading...</code>
+                            <button id="copyMacBtn" onclick="copyAgentCmd('macInstallCmd','copyMacBtn')" class="shrink-0 p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700 transition-all" title="Copy"><i data-lucide="copy" class="w-4 h-4"></i></button>
                         </div>
-                        <div class="flex items-start gap-2.5 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2.5">
-                            <i data-lucide="file-x" class="w-4 h-4 text-rose-500 shrink-0 mt-0.5"></i>
-                            <p class="text-xs text-rose-700 leading-relaxed">Removes XDG autostart .desktop + wrapper scripts</p>
+                        <div class="grid grid-cols-2 gap-3 mb-4">
+                            <div class="flex items-start gap-2.5 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2.5"><i data-lucide="check-circle" class="w-4 h-4 text-emerald-500 shrink-0 mt-0.5"></i><p class="text-xs text-emerald-700 leading-relaxed">Installs into Python venv under ~/Library — no sudo required</p></div>
+                            <div class="flex items-start gap-2.5 bg-sky-50 border border-sky-100 rounded-xl px-3 py-2.5"><i data-lucide="check-circle" class="w-4 h-4 text-sky-600 shrink-0 mt-0.5"></i><p class="text-xs text-sky-700 leading-relaxed">Registers launchd user agent (KeepAlive) · starts agent immediately</p></div>
                         </div>
-                        <div class="flex items-start gap-2.5 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2.5">
-                            <i data-lucide="cloud" class="w-4 h-4 text-emerald-500 shrink-0 mt-0.5"></i>
-                            <p class="text-xs text-emerald-700 leading-relaxed">Cloud data in Azure Storage is not touched</p>
+                        <div class="flex items-start gap-3 bg-amber-50 border border-amber-100 rounded-2xl px-4 py-3">
+                            <i data-lucide="info" class="w-4 h-4 text-amber-500 shrink-0 mt-0.5"></i>
+                            <p class="text-xs text-amber-700 leading-relaxed">Requires Python 3.9+ and macOS 12+. After install, grant Accessibility permission in <strong>System Settings → Privacy &amp; Security → Accessibility</strong> for full window tracking. Dashboard UI runs as a terminal command: <code class="bg-amber-100 px-1 rounded mx-0.5">python mac_telemetry_ui.py</code></p>
                         </div>
-                    </div>
-                    <div class="flex items-start gap-3 bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3">
-                        <i data-lucide="info" class="w-4 h-4 text-slate-500 shrink-0 mt-0.5"></i>
-                        <p class="text-xs text-slate-600 leading-relaxed">
-                            Non-interactive flag (skips the "Proceed? y/N" prompt): append
-                            <code class="bg-slate-200 px-1 rounded mx-0.5">| bash -s -- --yes</code> or set
-                            <code class="bg-slate-200 px-1 rounded mx-0.5">YES=1</code>. To also remove system packages (xdotool, libwnck), append
-                            <code class="bg-slate-200 px-1 rounded mx-0.5">--purge</code> (requires sudo).
-                        </p>
                     </div>
                 </div>
 
@@ -766,6 +726,9 @@
                         </a>
                         <a id="linuxBundleBtn" href="#" class="flex items-center gap-2.5 px-5 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-700 font-semibold rounded-xl text-sm transition-all">
                             <i data-lucide="package" class="w-4 h-4"></i>linux-telemetry-agent.zip
+                        </a>
+                        <a id="macBundleBtn" href="#" class="flex items-center gap-2.5 px-5 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-700 font-semibold rounded-xl text-sm transition-all">
+                            <i data-lucide="package" class="w-4 h-4"></i>mac-telemetry-agent.zip
                         </a>
                     </div>
                 </div>
@@ -897,7 +860,7 @@
                 </div>
 
                 <div class="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
-                    <h3 class="font-bold text-slate-800 mb-3">What gets removed</h3>
+                    <h3 class="font-bold text-slate-800 mb-3">What gets removed (Windows)</h3>
                     <div class="grid grid-cols-2 gap-3 text-sm">
                         <div class="flex items-center gap-2.5 p-3 bg-rose-50 rounded-xl"><i data-lucide="x-circle" class="w-4 h-4 text-rose-500 shrink-0"></i><span class="text-slate-700">Scheduled Task (TelemetryAgent)</span></div>
                         <div class="flex items-center gap-2.5 p-3 bg-rose-50 rounded-xl"><i data-lucide="x-circle" class="w-4 h-4 text-rose-500 shrink-0"></i><span class="text-slate-700">C:\Program Files\TelemetryAgent\</span></div>
@@ -905,6 +868,54 @@
                         <div class="flex items-center gap-2.5 p-3 bg-rose-50 rounded-xl"><i data-lucide="x-circle" class="w-4 h-4 text-rose-500 shrink-0"></i><span class="text-slate-700">%TEMP%\TelemetryAgent\ (local logs)</span></div>
                         <div class="flex items-center gap-2.5 p-3 bg-emerald-50 rounded-xl"><i data-lucide="check-circle" class="w-4 h-4 text-emerald-500 shrink-0"></i><span class="text-slate-700">Azure Storage data — kept</span></div>
                         <div class="flex items-center gap-2.5 p-3 bg-emerald-50 rounded-xl"><i data-lucide="check-circle" class="w-4 h-4 text-emerald-500 shrink-0"></i><span class="text-slate-700">Other employees — not affected</span></div>
+                    </div>
+                </div>
+
+                <!-- Linux uninstall -->
+                <div class="bg-white rounded-3xl border border-rose-200 shadow-sm p-6">
+                    <div class="flex items-center gap-3 mb-4">
+                        <div class="bg-rose-600 p-2.5 rounded-xl"><i data-lucide="terminal" class="w-4 h-4 text-white"></i></div>
+                        <div>
+                            <div class="flex items-center gap-2">
+                                <h3 class="font-bold text-slate-800">Linux — One Command Uninstall</h3>
+                                <span class="text-xs font-semibold bg-rose-100 text-rose-700 px-2 py-0.5 rounded-full">Run on the employee machine</span>
+                            </div>
+                            <p class="text-xs text-slate-400 mt-0.5">Stops agent, removes systemd + XDG autostart, deletes data directory. No sudo needed.</p>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-3 bg-slate-900 rounded-2xl px-5 py-4 mb-4">
+                        <span class="text-slate-500 font-mono text-sm shrink-0">$</span>
+                        <code id="linuxUninstallCmd" class="flex-1 text-sm text-rose-400 font-mono break-all">Loading...</code>
+                        <button id="copyLinuxUninstallBtn" onclick="copyAgentCmd('linuxUninstallCmd','copyLinuxUninstallBtn')" class="shrink-0 p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700 transition-all" title="Copy"><i data-lucide="copy" class="w-4 h-4"></i></button>
+                    </div>
+                    <div class="grid grid-cols-3 gap-3">
+                        <div class="flex items-start gap-2.5 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2.5"><i data-lucide="trash-2" class="w-4 h-4 text-rose-500 shrink-0 mt-0.5"></i><p class="text-xs text-rose-700 leading-relaxed">Stops systemd user service + watchdog timer</p></div>
+                        <div class="flex items-start gap-2.5 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2.5"><i data-lucide="file-x" class="w-4 h-4 text-rose-500 shrink-0 mt-0.5"></i><p class="text-xs text-rose-700 leading-relaxed">Removes XDG autostart .desktop + wrapper scripts</p></div>
+                        <div class="flex items-start gap-2.5 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2.5"><i data-lucide="cloud" class="w-4 h-4 text-emerald-500 shrink-0 mt-0.5"></i><p class="text-xs text-emerald-700 leading-relaxed">Cloud data in Azure Storage is not touched</p></div>
+                    </div>
+                </div>
+
+                <!-- macOS uninstall -->
+                <div class="bg-white rounded-3xl border border-rose-200 shadow-sm p-6">
+                    <div class="flex items-center gap-3 mb-4">
+                        <div class="bg-rose-600 p-2.5 rounded-xl"><i data-lucide="terminal" class="w-4 h-4 text-white"></i></div>
+                        <div>
+                            <div class="flex items-center gap-2">
+                                <h3 class="font-bold text-slate-800">macOS — One Command Uninstall</h3>
+                                <span class="text-xs font-semibold bg-rose-100 text-rose-700 px-2 py-0.5 rounded-full">Run on the employee machine</span>
+                            </div>
+                            <p class="text-xs text-slate-400 mt-0.5">Stops agent, removes launchd plist, deletes ~/Library/Application Support/TelemetryAgent. No sudo needed.</p>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-3 bg-slate-900 rounded-2xl px-5 py-4 mb-4">
+                        <span class="text-slate-500 font-mono text-sm shrink-0">$</span>
+                        <code id="macUninstallCmd" class="flex-1 text-sm text-rose-400 font-mono break-all">Loading...</code>
+                        <button id="copyMacUninstallBtn" onclick="copyAgentCmd('macUninstallCmd','copyMacUninstallBtn')" class="shrink-0 p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700 transition-all" title="Copy"><i data-lucide="copy" class="w-4 h-4"></i></button>
+                    </div>
+                    <div class="grid grid-cols-3 gap-3">
+                        <div class="flex items-start gap-2.5 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2.5"><i data-lucide="trash-2" class="w-4 h-4 text-rose-500 shrink-0 mt-0.5"></i><p class="text-xs text-rose-700 leading-relaxed">Unloads + removes launchd user agent plist</p></div>
+                        <div class="flex items-start gap-2.5 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2.5"><i data-lucide="file-x" class="w-4 h-4 text-rose-500 shrink-0 mt-0.5"></i><p class="text-xs text-rose-700 leading-relaxed">Removes ~/Library/Application Support/TelemetryAgent</p></div>
+                        <div class="flex items-start gap-2.5 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2.5"><i data-lucide="cloud" class="w-4 h-4 text-emerald-500 shrink-0 mt-0.5"></i><p class="text-xs text-emerald-700 leading-relaxed">Cloud data in Azure Storage is not touched</p></div>
                     </div>
                 </div>
             </div>
@@ -1602,6 +1613,11 @@ async function initApp() {
         `curl -fsSL '${base}/install-script-linux' | bash`;
     document.getElementById('linuxUninstallCmd').textContent =
         `curl -fsSL '${base}/uninstall-script-linux' | bash`;
+    document.getElementById('macInstallCmd').textContent =
+        `curl -fsSL '${base}/install-script-mac' | bash`;
+    document.getElementById('macUninstallCmd').textContent =
+        `curl -fsSL '${base}/uninstall-script-mac' | bash`;
+    document.getElementById('macBundleBtn').href = `${base}/download-mac-bundle`;
 
     // Version badge
     try {
@@ -4068,6 +4084,13 @@ function switchAgentTab(tab) {
         const active = t === tab;
         btn.classList.toggle('active', active);
         panel.classList.toggle('hidden', !active);
+    });
+}
+
+function switchInstallOS(os) {
+    ['windows','linux','mac'].forEach(o => {
+        document.getElementById(`osTab${o.charAt(0).toUpperCase()+o.slice(1)}`).classList.toggle('active', o === os);
+        document.getElementById(`osPanel${o.charAt(0).toUpperCase()+o.slice(1)}`).classList.toggle('hidden', o !== os);
     });
 }
 

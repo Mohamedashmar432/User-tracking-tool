@@ -88,6 +88,7 @@ def _agent_running() -> bool:
         return (time.time() - mtime) < threshold
     except Exception:
         return False
+        
 
 
 def _last_ingest_age() -> Optional[int]:

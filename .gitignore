@@ -1,7 +1,15 @@
 logs.txt
 CLAUDE.md
-user-track
-.claude
+user-track/
+.claude/
+
+# IDE / tool-generated indexes (never commit)
+.codegraph/
+.serena/
+
+# Scratch files from browser devtools sessions
+agent-page-*.json
+agent-page-*.txt
 
 # Azurite local emulator state
 __azurite_db_*.json

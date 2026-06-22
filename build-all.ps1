@@ -1,15 +1,17 @@
-# build-all.ps1 — Build Windows EXEs + Linux ZIP package
+# build-all.ps1 — Build Windows EXEs + Linux ZIP + Mac ZIP package
 #
 # Usage (from repo root, venv active):
-#   .\build-all.ps1              # Windows EXEs + Linux ZIP
-#   .\build-all.ps1 -SkipWindows # Linux ZIP only
-#   .\build-all.ps1 -SkipLinux   # Windows EXEs only
+#   .\build-all.ps1              # Windows EXEs + Linux ZIP + Mac ZIP
+#   .\build-all.ps1 -SkipWindows # Linux + Mac only
+#   .\build-all.ps1 -SkipLinux   # Windows + Mac only
+#   .\build-all.ps1 -SkipMac     # Windows + Linux only
 #   .\build-all.ps1 -NoLog       # Stream PyInstaller output to the console (debug)
 #
 # Output:
 #   dist\telemetry_agent\        (+ dist\telemetry_agent.zip)
 #   dist\telemetry_ui\           (+ dist\telemetry_ui.zip)
 #   dist\linux-telemetry-agent.zip
+#   dist\mac-telemetry-agent.zip
 #   build.log  (full PyInstaller log unless -NoLog is passed)
 #
 # Exit code: 0 on success, non-zero on first failure.
@@ -18,6 +20,7 @@
 param(
     [switch]$SkipWindows,
     [switch]$SkipLinux,
+    [switch]$SkipMac,
     [switch]$NoLog
 )
 
@@ -71,6 +74,7 @@ if (-not $SkipWindows -and -not (Test-Path $PyInstaller)) {
 $total = 0
 if (-not $SkipWindows) { $total += 3 }   # agent, UI, zip
 if (-not $SkipLinux)   { $total += 1 }   # linux zip
+if (-not $SkipMac)     { $total += 1 }   # mac zip
 $step  = 0
 
 # ── Clean ─────────────────────────────────────────────────────────────────────
@@ -187,6 +191,52 @@ if (-not $SkipLinux) {
 
     $linuxKB = [math]::Round((Get-Item $linuxZip).Length / 1KB, 1)
     OK "linux-telemetry-agent.zip  $linuxKB KB"
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# MAC SCRIPT ZIP
+# ════════════════════════════════════════════════════════════════════════════
+if (-not $SkipMac) {
+
+    $step++
+    Step $step $total "Packaging Mac script bundle"
+
+    $stage = Join-Path $DistDir "mac-stage"
+    Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Path $stage -Force | Out-Null
+
+    # Required source files — fail fast if any are missing
+    $required = @(
+        @{ Src = "mac_telemetry_agent.py";     Dst = "mac_telemetry_agent.py"   },
+        @{ Src = "mac_telemetry_ui.py";        Dst = "mac_telemetry_ui.py"      },
+        @{ Src = "mac\install.sh";             Dst = "install.sh"               },
+        @{ Src = "mac\uninstall.sh";           Dst = "uninstall.sh"             },
+        @{ Src = "mac\requirements-mac.txt";   Dst = "requirements-mac.txt"     },
+        @{ Src = "agent.config.json";          Dst = "agent.config.json"        }
+    )
+
+    foreach ($f in $required) {
+        $src = Join-Path $RepoRoot $f.Src
+        $dst = Join-Path $stage   $f.Dst
+        if (-not (Test-Path $src)) {
+            FAIL "Required source missing: $($f.Src)"
+        }
+        Copy-Item -LiteralPath $src -Destination $dst -Force
+    }
+
+    # Normalise line endings to LF (required for bash scripts on macOS)
+    foreach ($sh in (Get-ChildItem -LiteralPath $stage -Filter "*.sh")) {
+        $c = [System.IO.File]::ReadAllText($sh.FullName) -replace "`r`n", "`n"
+        [System.IO.File]::WriteAllText($sh.FullName, $c, [System.Text.UTF8Encoding]::new($false))
+    }
+
+    $macZip = Join-Path $DistDir "mac-telemetry-agent.zip"
+    if (Test-Path $macZip) { Remove-Item -LiteralPath $macZip -Force }
+    Compress-Archive -Path "$stage\*" -DestinationPath $macZip -Force
+    Remove-Item -Recurse -Force $stage
+
+    $macKB = [math]::Round((Get-Item $macZip).Length / 1KB, 1)
+    OK "mac-telemetry-agent.zip  $macKB KB"
 }
 
 # ════════════════════════════════════════════════════════════════════════════

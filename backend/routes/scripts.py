@@ -292,3 +292,75 @@ async def download_linux_bundle():
         status_code=404,
         detail="Linux bundle not built yet. Run: .\\build-all.ps1 -SkipWindows",
     )
+
+
+# ── macOS endpoints ──────────────────────────────────────────────────────────────
+
+@router.get("/install-script-mac")
+async def install_script_mac(request: Request):
+    """
+    Bash installer for macOS — serves mac/install.sh with SERVER_URL and
+    AGENT_API_KEY injected so `curl | bash` works with no extra flags.
+    """
+    base = _public_base(request)
+    install_sh = Path(__file__).parent.parent.parent / "mac" / "install.sh"
+    if not install_sh.exists():
+        raise HTTPException(status_code=404, detail="mac/install.sh not found in repo")
+
+    content = install_sh.read_text(encoding="utf-8")
+    content = content.replace(
+        'SERVER_URL="${SERVER_URL:-}"',
+        f'SERVER_URL="${{SERVER_URL:-{base}}}"',
+    )
+    if AGENT_KEY:
+        content = content.replace(
+            'AGENT_API_KEY="${AGENT_API_KEY:-}"',
+            f'AGENT_API_KEY="${{AGENT_API_KEY:-{AGENT_KEY}}}"',
+        )
+    content = content.replace("\r\n", "\n")
+    return PlainTextResponse(content=content, media_type="text/plain; charset=utf-8")
+
+
+@router.get("/uninstall-script-mac")
+async def uninstall_script_mac(request: Request):
+    """Bash uninstaller for macOS — curl -fsSL <server>/uninstall-script-mac | bash"""
+    uninstall_sh = Path(__file__).parent.parent.parent / "mac" / "uninstall.sh"
+    if not uninstall_sh.exists():
+        raise HTTPException(status_code=404, detail="mac/uninstall.sh not found in repo")
+    content = uninstall_sh.read_text(encoding="utf-8")
+    content = content.replace("\r\n", "\n")
+    return PlainTextResponse(content=content, media_type="text/plain; charset=utf-8")
+
+
+@router.get("/download-mac-agent")
+async def download_mac_agent():
+    """Serve mac_telemetry_agent.py for curl-based installs."""
+    f = Path(__file__).parent.parent.parent / "mac_telemetry_agent.py"
+    if not f.exists():
+        raise HTTPException(status_code=404, detail="mac_telemetry_agent.py not found")
+    return PlainTextResponse(content=f.read_text(encoding="utf-8"),
+                             media_type="text/plain; charset=utf-8")
+
+
+@router.get("/download-mac-dashboard")
+async def download_mac_dashboard():
+    """Serve mac_telemetry_ui.py (terminal dashboard) for curl-based installs."""
+    f = Path(__file__).parent.parent.parent / "mac_telemetry_ui.py"
+    if not f.exists():
+        raise HTTPException(status_code=404, detail="mac_telemetry_ui.py not found")
+    return PlainTextResponse(content=f.read_text(encoding="utf-8"),
+                             media_type="text/plain; charset=utf-8")
+
+
+@router.get("/download-mac-bundle")
+async def download_mac_bundle():
+    """Serve mac-telemetry-agent.zip — pre-built script bundle for manual installs."""
+    root = Path(__file__).parent.parent.parent
+    zp = root / "dist" / "mac-telemetry-agent.zip"
+    if zp.exists():
+        return FileResponse(str(zp), media_type="application/zip",
+                            filename="mac-telemetry-agent.zip")
+    raise HTTPException(
+        status_code=404,
+        detail="Mac bundle not built yet. Run: .\\build-all.ps1 -SkipWindows -SkipLinux",
+    )
