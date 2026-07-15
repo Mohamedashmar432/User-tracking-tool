@@ -905,15 +905,16 @@ def _build_agent_plist(exec_args: list) -> dict:
 
     KeepAlive=true makes launchd act as a watchdog — it restarts the agent
     automatically on any exit/crash, replacing the separate watchdog service
-    used on Linux.  ThrottleInterval=10 prevents restart storms if the agent
-    crashes immediately on startup.
+    used on Linux.  ThrottleInterval=30 gives launchd room to hit its own
+    circuit breaker (backs off after too-frequent exits) before the user
+    notices a slow login — 10s was too aggressive on real hardware.
     """
     return {
         "Label":            LAUNCH_AGENT_LABEL,
         "ProgramArguments": exec_args,
         "RunAtLoad":        True,
         "KeepAlive":        True,
-        "ThrottleInterval": 10,
+        "ThrottleInterval": 30,
         "StandardOutPath":  LOG_PATH,
         "StandardErrorPath": LOG_PATH,
     }

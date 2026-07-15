@@ -620,7 +620,65 @@ def is_session_locked() -> bool:
 
 # ── Active window ─────────────────────────────────────────────────────────────────
 
+_APP_NAME_MAP = {
+    "firefox-bin": "Firefox", "firefox": "Firefox",
+    "chrome": "Chrome", "google-chrome": "Chrome",
+    "chromium-browser": "Chromium", "chromium": "Chromium",
+    "code": "VS Code", "code-oss": "VS Code", "codium": "VS Code",
+    "slack": "Slack", "zoom": "Zoom", "spotify": "Spotify",
+    "thunderbird": "Thunderbird", "signal-desktop": "Signal",
+    "discord": "Discord", "telegram-desktop": "Telegram",
+    "teams": "Microsoft Teams", "teams-for-linux": "Microsoft Teams",
+}
+
+
+def _normalize_app_name(raw: str) -> str:
+    if not raw or raw == "Unknown":
+        return raw
+    return _APP_NAME_MAP.get(raw.lower(), raw)
+
+
 _atspi_ok: bool = True   # set False after first permanent failure to stop retrying
+
+
+def _get_active_window_introspect() -> tuple:
+    """
+    Get the focused window via org.gnome.Shell.Introspect.GetWindows().
+
+    Stable D-Bus interface available on GNOME 41+ (Ubuntu 22.04+).
+    Not Shell.Eval — this is the compositor's own window registry.
+    No accessibility settings, no extra packages, no root required.
+    Returns ("Unknown", "") on non-GNOME desktops or any failure.
+    """
+    desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").upper()
+    if "GNOME" not in desktop and "UBUNTU" not in desktop:
+        return "Unknown", ""
+    out = _run([
+        "gdbus", "call", "--session",
+        "--dest",        "org.gnome.Shell",
+        "--object-path", "/org/gnome/Shell/Introspect",
+        "--method",      "org.gnome.Shell.Introspect.GetWindows",
+    ], timeout=2.0)
+    if not out:
+        return "Unknown", ""
+    try:
+        # gdbus returns a GLib Variant string. Find the block where focus=true.
+        m = re.search(
+            r"uint64\s+\d+:\s*\{([^{}]*'focus':\s*<true>[^{}]*)\}", out)
+        if not m:
+            return "Unknown", ""
+        block = m.group(1)
+        title, wm_class = "", ""
+        t = re.search(r"'title':\s*<'(.*?)'>", block)
+        if t:
+            title = t.group(1)
+        w = re.search(r"'wm-class':\s*<'(.*?)'>", block)
+        if w:
+            wm_class = w.group(1)
+        app = _normalize_app_name(wm_class or (title.split()[-1] if title else "Unknown"))
+        return (app or "Unknown"), title
+    except Exception:
+        return "Unknown", ""
 
 
 def _get_active_window_atspi() -> tuple:
@@ -746,16 +804,19 @@ def get_active_window() -> tuple:
     # xdotool and xprop only see XWayland apps on a Wayland session; native
     # Wayland apps (Firefox, GNOME Terminal, etc.) are invisible to them.
     if os.environ.get("WAYLAND_DISPLAY"):
-        # 0a. AT-SPI2 — works on GNOME Wayland without Shell.Eval or any display
-        #     vars.  Requires gir1.2-atspi-2.0; skips silently if absent.
+        # 0a. GNOME Shell Introspect — stable D-Bus, no settings, GNOME 41+
+        app, title = _get_active_window_introspect()
+        if app != "Unknown":
+            return app, title
+        # 0b. AT-SPI2 — works when user has opted in to toolkit-accessibility
         app, title = _get_active_window_atspi()
         if app != "Unknown":
             return app, title
-        # 0b. GNOME Shell D-Bus (requires Shell.Eval; disabled in GNOME 45+)
+        # 0c. GNOME Shell D-Bus Eval (disabled by default in GNOME 45+)
         app, title = _get_active_window_wayland()
         if app != "Unknown":
             return app, title
-        # 0c. /proc/<pid>/comm via XWayland _NET_WM_PID — pure-Python, no C libs
+        # 0d. /proc/<pid>/exe via XWayland _NET_WM_PID — pure-Python, no C libs
         app, title = _get_active_window_proc()
         if app != "Unknown":
             return app, title
@@ -780,10 +841,15 @@ def get_active_window() -> tuple:
             pid_str = _run(["xdotool", "getwindowpid", win_id])
             if pid_str and pid_str.isdigit():
                 try:
-                    with open(f"/proc/{pid_str}/comm", "rb") as f:
-                        app = f.read().decode(errors="replace").strip()
+                    app = _normalize_app_name(
+                        os.path.basename(os.readlink(f"/proc/{pid_str}/exe")))
                 except Exception:
-                    app = ""
+                    try:
+                        with open(f"/proc/{pid_str}/comm", "rb") as f:
+                            app = _normalize_app_name(
+                                f.read().decode(errors="replace").strip())
+                    except Exception:
+                        app = ""
             if not app:
                 app = title.split()[-1] if title else "Unknown"
         return app, title
@@ -818,11 +884,16 @@ def get_active_window() -> tuple:
         if not app:
             p = re.search(r'_NET_WM_PID\([^)]+\) = (\d+)', xp)
             if p:
+                pid_str = p.group(1)
                 try:
-                    with open(f"/proc/{p.group(1)}/comm") as f:
-                        app = f.read().strip()
+                    app = _normalize_app_name(
+                        os.path.basename(os.readlink(f"/proc/{pid_str}/exe")))
                 except Exception:
-                    pass
+                    try:
+                        with open(f"/proc/{pid_str}/comm") as f:
+                            app = _normalize_app_name(f.read().strip())
+                    except Exception:
+                        pass
 
         if app or title:
             return (app or title.split()[-1] or "Unknown"), title
@@ -873,8 +944,11 @@ def _get_active_window_proc() -> tuple:
         if not p:
             return "Unknown", ""
         pid = p.group(1)
-        with open(f"/proc/{pid}/comm", "rb") as f:
-            app = f.read().decode(errors="replace").strip()
+        try:
+            app = _normalize_app_name(os.path.basename(os.readlink(f"/proc/{pid}/exe")))
+        except Exception:
+            with open(f"/proc/{pid}/comm", "rb") as f:
+                app = _normalize_app_name(f.read().decode(errors="replace").strip())
         # Pull the window title for domain extraction
         rt = subprocess.run(
             ["xprop", "-id", win_hex, "_NET_WM_NAME", "WM_NAME"],

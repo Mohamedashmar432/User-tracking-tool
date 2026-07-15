@@ -14,8 +14,9 @@ Categorisation philosophy (technical-worker defaults)
 - No "Neutral" category: every event is Productive or Unproductive.
 """
 
+from datetime import datetime, timezone
 from functools import lru_cache
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 # ── Browser process names ────────────────────────────────────────────────────────
 BROWSER_APPS: set = {
@@ -362,25 +363,69 @@ def _merge_consecutive(events: List[Dict]) -> List[Dict]:
 _MAX_DAY_SECS = 86_400  # 24 h — hard ceiling for any per-day metric
 
 
-def _agg_summary(merged: List[Dict]) -> Dict[str, Any]:
-    total_active    = 0
-    total_idle      = 0
-    total_locked    = 0
-    productive_secs = 0
+def _to_epoch(ts: str) -> float | None:
+    try:
+        return datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp()
+    except (ValueError, TypeError):
+        return None
+
+
+def _union_seconds(intervals: List[Tuple[float, float]]) -> int:
+    """
+    Total seconds covered by a set of (start, end) intervals, with overlaps
+    collapsed instead of summed.
+
+    ponytail: a user can have events from more than one device (or a
+    replayed/duplicate batch) for the same day. Two devices active over the
+    same wall-clock window are still only one hour of real time, not two —
+    summing their durations independently double-counts the overlap. This
+    merges overlapping/touching intervals first so the total can never
+    exceed the real elapsed span they cover.
+    """
+    if not intervals:
+        return 0
+    intervals = sorted(intervals)
+    total = 0.0
+    cur_start, cur_end = intervals[0]
+    for start, end in intervals[1:]:
+        if start <= cur_end:
+            cur_end = max(cur_end, end)
+        else:
+            total += cur_end - cur_start
+            cur_start, cur_end = start, end
+    total += cur_end - cur_start
+    return int(total)
+
+
+def _agg_summary(events: List[Dict]) -> Dict[str, Any]:
+    active_ivals:     List[Tuple[float, float]] = []
+    idle_ivals:       List[Tuple[float, float]] = []
+    locked_ivals:     List[Tuple[float, float]] = []
+    productive_ivals: List[Tuple[float, float]] = []
     app_times: Dict[str, int] = {}
 
-    for ev in merged:
-        dur    = ev["duration"]
+    for ev in events:
+        start = _to_epoch(ev.get("timestamp", ""))
+        dur   = ev["duration"]
+        if start is None:
+            continue
+        end    = start + dur
         locked = ev.get("locked", False)
+
         if ev["active"]:
-            total_active            += dur
-            app_times[ev["app"]]     = app_times.get(ev["app"], 0) + dur
+            active_ivals.append((start, end))
+            app_times[ev["app"]] = app_times.get(ev["app"], 0) + dur
             if categorize(ev["app"], ev.get("domain", "")) == "Productive":
-                productive_secs += dur
+                productive_ivals.append((start, end))
         elif locked:
-            total_locked += dur
+            locked_ivals.append((start, end))
         else:
-            total_idle += dur
+            idle_ivals.append((start, end))
+
+    total_active    = _union_seconds(active_ivals)
+    total_idle      = _union_seconds(idle_ivals)
+    total_locked    = _union_seconds(locked_ivals)
+    productive_secs = _union_seconds(productive_ivals)
 
     # ── 24-hour sanity cap ────────────────────────────────────────────────────
     # A single calendar day cannot contain more than 86 400 seconds of time.
@@ -480,7 +525,7 @@ def aggregate_all(events: List[Dict]) -> Dict[str, Any]:
     """
     merged = _merge_consecutive(events)
     return {
-        "summary":  _agg_summary(merged),
+        "summary":  _agg_summary(events),
         "apps":     _agg_apps(merged, events),
         "timeline": _build_timeline_from_merged(merged),
     }
@@ -488,7 +533,7 @@ def aggregate_all(events: List[Dict]) -> Dict[str, Any]:
 
 def aggregate_summary(events: List[Dict]) -> Dict[str, Any]:
     """Daily KPI cards. Prefer aggregate_all() when apps+timeline are also needed."""
-    return _agg_summary(_merge_consecutive(events))
+    return _agg_summary(events)
 
 
 def aggregate_apps(events: List[Dict]) -> List[Dict[str, Any]]:
@@ -500,3 +545,41 @@ def aggregate_apps(events: List[Dict]) -> List[Dict[str, Any]]:
 def build_timeline(events: List[Dict]) -> List[Dict[str, Any]]:
     """Time-series for charting. Prefer aggregate_all() when summary+apps are also needed."""
     return _build_timeline_from_merged(_merge_consecutive(events))
+
+
+def _demo() -> None:
+    """python backend/aggregator.py — asserts overlapping devices don't double-count."""
+    # Two devices, both "active" 09:00:00-10:00:00 (1h real time), different apps.
+    events = [
+        {"app": "Chrome.exe", "domain": "", "active": True, "locked": False,
+         "duration": 3600, "timestamp": "2026-07-02T09:00:00+00:00", "device": "laptop"},
+        {"app": "Code.exe", "domain": "", "active": True, "locked": False,
+         "duration": 3600, "timestamp": "2026-07-02T09:00:00+00:00", "device": "desktop"},
+    ]
+    summary = aggregate_summary(events)
+    assert summary["total_active_time"] == 3600, summary  # not 7200 (naive sum)
+
+    # Non-overlapping events still add up normally.
+    events_seq = [
+        {"app": "Chrome.exe", "domain": "", "active": True, "locked": False,
+         "duration": 1800, "timestamp": "2026-07-02T09:00:00+00:00", "device": "laptop"},
+        {"app": "Code.exe", "domain": "", "active": True, "locked": False,
+         "duration": 1800, "timestamp": "2026-07-02T09:30:00+00:00", "device": "laptop"},
+    ]
+    assert aggregate_summary(events_seq)["total_active_time"] == 3600
+
+    # Same device, two apps reported active over the identical window
+    # (e.g. a split-view/parallel-usage double-log) — must still count once.
+    events_same_device = [
+        {"app": "Chrome.exe", "domain": "", "active": True, "locked": False,
+         "duration": 1800, "timestamp": "2026-07-02T09:00:00+00:00", "device": "laptop"},
+        {"app": "Excel.exe", "domain": "", "active": True, "locked": False,
+         "duration": 1800, "timestamp": "2026-07-02T09:00:00+00:00", "device": "laptop"},
+    ]
+    assert aggregate_summary(events_same_device)["total_active_time"] == 1800
+
+    print("aggregator._demo: OK")
+
+
+if __name__ == "__main__":
+    _demo()

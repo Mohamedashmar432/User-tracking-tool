@@ -1,0 +1,11 @@
+name: ZeroStrike SAST
+on: [push, pull_request]
+jobs:
+  zerostrike:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ZeroStrike scanner
+        run: curl -fsSL https://zero-strike-production.up.railway.app/api/v1/downloads/zerostrike/latest/linux-amd64 -o ./zerostrike && chmod +x ./zerostrike
+      - name: ZeroStrike scan
+        run: ./zerostrike scan . --server https://zero-strike-production.up.railway.app --token ${{ secrets.ZEROSTRIKE_TOKEN }}

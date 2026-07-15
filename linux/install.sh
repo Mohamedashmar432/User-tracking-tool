@@ -315,29 +315,20 @@ if ! $AGENT_STARTED; then
 fi
 
 # ── Enable GNOME Shell window tracking on Wayland ─────────────────────────────
-# On GNOME Wayland, native apps (Terminal, Firefox, Files, etc.) are invisible
-# to xdotool and xprop because they run in Wayland mode, not XWayland.
-# org.gnome.Shell.Eval is the only way to get the focused window on Wayland —
-# but it requires development-tools to be enabled.  This is safe: the agent
-# runs as the same user and already has full access to the session.
+# On GNOME Wayland, native apps are invisible to xdotool/xprop.
+# We enable development-tools (Shell.Eval fallback) but intentionally skip
+# toolkit-accessibility — that setting can destabilise GNOME on Ubuntu 22.04+
+# (AT-SPI2 crash loop → login loop that looks like an unbootable OS).
+# Users who want full snap/GTK app tracking can enable it manually:
+#   gsettings set org.gnome.desktop.interface toolkit-accessibility true
 if command -v gsettings &>/dev/null; then
     _SESSION="${XDG_SESSION_TYPE:-}"
     _DESKTOP="${XDG_CURRENT_DESKTOP:-}"
     if [[ "$_SESSION" == "wayland" ]] || [[ "${_DESKTOP^^}" == *"GNOME"* ]] || [[ "${_DESKTOP^^}" == *"UBUNTU"* ]]; then
-        # development-tools enables Shell.Eval (fallback for older GNOME)
         gsettings set org.gnome.shell development-tools true 2>/dev/null || true
-
-        # toolkit-accessibility=true makes GTK apps (Firefox, Chrome, Files, etc.)
-        # register with AT-SPI2 so the agent can detect them on Wayland.
-        # Without this, snap-packaged apps are invisible to window tracking.
-        if gsettings set org.gnome.desktop.interface toolkit-accessibility true 2>/dev/null; then
-            success "AT-SPI accessibility enabled — all apps including Firefox will be tracked"
-        else
-            warn "Could not enable toolkit-accessibility."
-            warn "Firefox and other GTK apps may show as Unknown. Fix manually:"
-            warn "  gsettings set org.gnome.desktop.interface toolkit-accessibility true"
-            warn "  Then restart any open apps (Firefox, etc.)"
-        fi
+        warn "AT-SPI (toolkit-accessibility) NOT auto-enabled — avoids GNOME crash bug."
+        warn "For full snap/Firefox tracking, run manually:"
+        warn "  gsettings set org.gnome.desktop.interface toolkit-accessibility true"
     fi
 fi
 
